@@ -10,8 +10,12 @@ error() { echo -e "\e[31m[ERROR]\e[0m $*"; }
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
-# Load config
+# Ensure config exists and generate secrets before loading
 test -f "$ROOT_DIR/config.env" || { error "config.env no encontrado"; exit 1; }
+# Generate strong secrets if defaults are present (idempotent)
+bash "$ROOT_DIR/scripts/generate-secrets.sh"
+
+# Load config after potential updates
 set -a; source "$ROOT_DIR/config.env"; set +a
 
 # Ensure scripts executable

@@ -3,12 +3,11 @@
 Requisitos: Ubuntu 24.04 LTS con acceso a Internet y privilegios sudo/root.
 
 ## 1. Configurar variables
-Edite `config.env` y ajuste:
-- IPs, puertos, redes permitidas
-- Credenciales de base de datos
-- Forwarders DNS
-- Credenciales de PowerDNS-Admin
-- FQDN para HTTPS
+Opcional: puede editar `config.env` para ajustar IPs, puertos, redes, forwarders y FQDN.
+Notas importantes:
+- Las contraseñas y claves (PDNS_DB_PASS, PDNSADMIN_DB_PASS, PDNSA_ADMIN_PASSWORD, PDNS_API_KEY) se generan automáticamente en el primer `install.sh` si están con valores por defecto o vacías.
+- El instalador crea una copia de seguridad de `config.env` antes de modificarlo (`config.env.bak.<timestamp>`).
+- Después de la instalación, guarde estas credenciales en un lugar seguro.
 
 ## 2. Ejecutar instalación
 sudo bash install.sh
