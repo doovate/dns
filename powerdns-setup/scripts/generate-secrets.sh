@@ -37,9 +37,11 @@ get_var(){
   line=$(grep -E "^${key}=" "$CONFIG" || true)
   [[ -z "$line" ]] && { echo ""; return 0; }
   val=${line#*=}
-  # strip surrounding quotes
-  val=${val#"}"; val=${val%"}"}
-  val=${val#\"}; val=${val%\"}
+  # strip surrounding quotes (handles both " and ')
+  val="${val%\"}"
+  val="${val#\"}"
+  val="${val%\'}"
+  val="${val#\'}"
   echo "$val"
 }
 
