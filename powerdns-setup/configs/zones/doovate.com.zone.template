@@ -1,0 +1,16 @@
+$ORIGIN doovate.com.
+$TTL 3600
+@   IN SOA dns.doovate.com. admin.doovate.com. (
+        2025010101 ; serial
+        3600       ; refresh
+        900        ; retry
+        1209600    ; expire
+        300 )      ; minimum
+
+; NS
+@   IN NS dns.doovate.com.
+
+; A records
+dns IN A 192.168.24.60
+sv-vpn IN A 192.168.24.50
+dv-vpn IN A 192.168.24.20

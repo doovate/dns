@@ -1,0 +1,33 @@
+# PowerDNS Authoritative configuration (template)
+# Generated from config.env
+
+setuid=pdns
+setgid=pdns
+local-address=127.0.0.1
+local-port={{AUTHORITATIVE_PORT}}
+
+# Launch gpgsql backend (PostgreSQL) by default
+launch=gpgsql
+
+# gpgsql settings
+gpgsql-host=127.0.0.1
+gpgsql-port={{PG_PORT}}
+gpgsql-dbname={{PDNS_DB_NAME}}
+gpgsql-user={{PDNS_DB_USER}}
+gpgsql-password={{PDNS_DB_PASS}}
+
+# API for PowerDNS-Admin and automation
+api=yes
+api-key={{PDNS_API_KEY}}
+webserver=yes
+webserver-address=127.0.0.1
+webserver-port={{PDNS_API_PORT}}
+
+# Security
+allow-axfr-ips={{INTERNAL_NETWORK_CIDR}},{{VPN_NETWORK_CIDR}}
+allow-dnsupdate-from={{INTERNAL_NETWORK_CIDR}},{{VPN_NETWORK_CIDR}}
+
+# Performance and logging
+loglevel=4
+cache-ttl=60
+query-logging=no
