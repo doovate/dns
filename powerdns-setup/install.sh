@@ -103,24 +103,38 @@ apt_install_packages() {
     postgresql postgresql-contrib \
     pdns-server pdns-backend-pgsql pdns-recursor \
     nginx openssl \
-    git python3-venv python3-pip python3-dev build-essential pkg-config libmariadb-dev libpq-dev \
+    git python3-venv python3-pip python3-dev build-essential pkg-config libmariadb-dev libpq-dev libffi-dev libldap2-dev libsasl2-dev libssl-dev \
     ufw
 }
 
 setup_postgres() {
   log "Configuring PostgreSQL for PowerDNS and PowerDNS-Admin"
+  # Escape single quotes in password for SQL safety
+  SQL_DB_PASSWORD=${DB_PASSWORD//\'/''}
   # Create DB and user for PDNS
   sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE ROLE $DB_USER WITH LOGIN PASSWORD '$DB_PASSWORD';"
+    sudo -u postgres psql -c "CREATE ROLE $DB_USER WITH LOGIN PASSWORD '$SQL_DB_PASSWORD';"
   # Always ensure the password matches the current config to avoid auth failures on reruns
-  sudo -u postgres psql -c "ALTER ROLE $DB_USER WITH PASSWORD '$DB_PASSWORD';" >/dev/null
+  sudo -u postgres psql -c "ALTER ROLE $DB_USER WITH PASSWORD '$SQL_DB_PASSWORD';" >/dev/null
   sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 || \
     sudo -u postgres createdb -O "$DB_USER" "$DB_NAME"
 
-  # Apply PDNS schema
-  if ! sudo -u postgres psql -d "$DB_NAME" -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='domains'" | grep -q 1; then
-    info "Applying PowerDNS authoritative schema"
-    cat <<'SQL' | sudo -u postgres psql -d "$DB_NAME"
+  # Ensure privileges
+  sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DB_NAME\" TO \"$DB_USER\";" >/dev/null || true
+  sudo -u postgres psql -d "$DB_NAME" -c "ALTER SCHEMA public OWNER TO \"$DB_USER\";" >/dev/null || true
+
+  # Ensure pg_hba.conf allows pdns user from localhost
+  PG_HBA=$(ls /etc/postgresql/*/main/pg_hba.conf 2>/dev/null | head -n1)
+  if [[ -n "$PG_HBA" ]]; then
+    if ! grep -Eqs "^host\s+${DB_NAME}\s+${DB_USER}\s+127\.0\.0\.1/32\s+scram-sha-256" "$PG_HBA"; then
+      echo "host    ${DB_NAME}    ${DB_USER}    127.0.0.1/32    scram-sha-256" >> "$PG_HBA"
+      systemctl restart postgresql || systemctl reload postgresql || true
+    fi
+  fi
+
+  # Apply PDNS schema (always, idempotent via IF NOT EXISTS)
+  info "Applying PowerDNS authoritative schema (idempotent)"
+  cat <<'SQL' | sudo -u postgres psql -d "$DB_NAME"
 CREATE TABLE IF NOT EXISTS domains (
   id              SERIAL PRIMARY KEY,
   name            VARCHAR(255) NOT NULL,
@@ -193,6 +207,9 @@ CREATE TABLE IF NOT EXISTS tsigkeys (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS namealgoindex ON tsigkeys(name, algorithm);
 SQL
+  # Verify schema presence
+  if ! sudo -u postgres psql -d "$DB_NAME" -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='domains'" | grep -q 1; then
+    warn "PowerDNS schema verification failed: table 'domains' not found in $DB_NAME. Check PostgreSQL logs."
   fi
 
   # Separate DB for PowerDNS-Admin

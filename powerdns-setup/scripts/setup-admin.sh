@@ -16,7 +16,7 @@ PDNSA_PORT=9190
 install_reqs() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y git python3-venv python3-pip python3-dev build-essential libpq-dev pkg-config libmariadb-dev
+  apt-get install -y git python3-venv python3-pip python3-dev build-essential libpq-dev pkg-config libmariadb-dev libffi-dev libldap2-dev libsasl2-dev libssl-dev
 }
 
 setup_app() {
