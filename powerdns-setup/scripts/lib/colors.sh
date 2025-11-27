@@ -1,46 +1,28 @@
 #!/usr/bin/env bash
-# Simple ANSI color helpers and title borders
+# Colores y formato para salida en terminal
 
-bold() { tput bold 2>/dev/null || true; }
-normal() { tput sgr0 2>/dev/null || true; }
-red() { tput setaf 1 2>/dev/null || true; }
-green() { tput setaf 2 2>/dev/null || true; }
-yellow() { tput setaf 3 2>/dev/null || true; }
-blue() { tput setaf 4 2>/dev/null || true; }
+if [ -t 1 ]; then
+  NORMAL='\033[0m'
+  BOLD='\033[1m'
+  DIM='\033[2m'
+  RED='\033[0;31m'
+  GREEN='\033[0;32m'
+  YELLOW='\033[0;33m'
+  BLUE='\033[0;34m'
+  MAGENTA='\033[0;35m'
+  CYAN='\033[0;36m'
+else
+  NORMAL=''
+  BOLD=''
+  DIM=''
+  RED=''
+  GREEN=''
+  YELLOW=''
+  BLUE=''
+  MAGENTA=''
+  CYAN=''
+fi
 
-reset_color() { tput sgr0 2>/dev/null || true; }
-
-# Decorative borders/lines
-_title_border_cache=""
-
-title_border() {
-  if [[ -n "$_title_border_cache" ]]; then
-    echo "$_title_border_cache"; return
-  fi
-  local width=60
-  local border=""; for _ in $(seq 1 $width); do border+="═"; done
-  _title_border_cache="╔${border}╗"
-  echo "$_title_border_cache"
-}
-
-title_line() {
-  local width=60
-  local spaces=""; for _ in $(seq 1 $width); do spaces+=" "; done
-  echo "║${spaces}║"
-}
-
-# UI helpers for step results
-show_step_success() {
-  local title="$1"
-  printf "%s[✓] %s%s\n" "$(green)" "${title} COMPLETADO" "$(normal)"
-}
-
-show_step_skipped() {
-  local title="$1"
-  printf "%s[≡] %s%s\n" "$(yellow)" "${title} (saltado, ya estaba completado)" "$(normal)"
-}
-
-show_step_error() {
-  local title="$1"; local code="$2"
-  printf "%s[✗] %s (código %s)%s\n" "$(red)" "$title" "$code" "$(normal)"
-}
+box_top() { local title="$1"; echo -e "${BOLD}╔════════════════════════════════════════════════════════════╗\n║  ${title}$(printf '%*s' $((56 - ${#title})) '' )║\n╚════════════════════════════════════════════════════════════╝${NORMAL}"; }
+check_ok(){ echo -e "${GREEN}✓${NORMAL}"; }
+check_fail(){ echo -e "${RED}✗${NORMAL}"; }

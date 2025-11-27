@@ -1,56 +1,59 @@
 #!/usr/bin/env bash
-# Centralized logging utilities with optional file logging and command runner
+# Sistema de logging con niveles y archivo de log
+set -o pipefail
 
-init_logging() {
-  if [[ "${ENABLE_LOGGING:-true}" == true ]]; then
-    sudo mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
-    sudo touch "$LOG_FILE" 2>/dev/null || true
-    sudo chmod 640 "$LOG_FILE" 2>/dev/null || true
-  fi
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../" && pwd)"
 
-ts() { date '+%Y-%m-%d %H:%M:%S'; }
+LOG_FILE_DEFAULT="/var/log/powerdns-setup.log"
 
-_mask_secrets() {
-  sed -E \
-    -e "s/(password=)[^ ']+/\1********/Ig" \
-    -e "s/(DB_PASSWORD=)[^ ']+/\1********/Ig" \
-    -e "s/(API[_A-Z]*=)[^ ']+/\1********/Ig"
-}
+# shellcheck disable=SC1091
+[ -f "$ROOT_DIR/config.env" ] && source "$ROOT_DIR/config.env"
 
-_log() {
+LOG_FILE=${LOG_FILE:-${LOG_FILE_DEFAULT}}
+ENABLE_LOGGING=${ENABLE_LOGGING:-true}
+VERBOSE_MODE=${VERBOSE_MODE:-true}
+
+_timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
+
+_log_write(){
   local level="$1"; shift
   local msg="$*"
-  local line="[$(ts)] [$level] $msg"
-  if command -v tput >/dev/null 2>&1; then
-    case "$level" in
-      INFO) printf "%s%s%s\n" "$(green)" "$line" "$(normal)" ;;
-      WARN) printf "%s%s%s\n" "$(yellow)" "$line" "$(normal)" ;;
-      ERROR) printf "%s%s%s\n" "$(red)" "$line" "$(normal)" ;;
-      *) echo "$line" ;;
-    esac
-  else
-    echo "$line"
+  local line="[$(_timestamp)] [$level] $msg"
+  if [ "$ENABLE_LOGGING" = true ]; then
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+    echo -e "$line" >> "$LOG_FILE" 2>/dev/null || true
   fi
-  if [[ "${ENABLE_LOGGING:-true}" == true ]]; then
-    echo "$line" | _mask_secrets | sudo tee -a "$LOG_FILE" >/dev/null || true
+  # Imprimir siempre a stdout si VERBOSE o si es WARNING/ERROR
+  if [ "$VERBOSE_MODE" = true ] || [ "$level" != "DEBUG" ]; then
+    echo -e "$line"
   fi
 }
 
-log_info() { _log INFO "$*"; }
-log_warn() { _log WARN "$*"; }
-log_error() { _log ERROR "$*"; }
+log_debug(){ _log_write "DEBUG" "$*"; }
+log_info(){ _log_write "INFO" "$*"; }
+log_warn(){ _log_write "WARN" "$*"; }
+log_error(){ _log_write "ERROR" "$*"; }
+log_success(){ _log_write "SUCCESS" "$*"; }
 
-# Run a command with logging. If VERBOSE_MODE, echo the command first.
-# Usage: log_cmd <cmd...>
-log_cmd() {
-  if [[ "${VERBOSE_MODE:-true}" == true ]]; then
-    log_info "Ejecutando: $*"
-  fi
-  if [[ "${DRY_RUN:-false}" == true ]]; then
-    log_info "[DRY-RUN] $*"
+# Ejecuta un comando mostrando el comando, captura salida y código
+log_cmd(){
+  local cmd="$*"
+  log_info "[Ejecutando] $cmd"
+  if [ "$DRY_RUN" = true ]; then
+    log_info "DRY-RUN: no se ejecutó el comando"
     return 0
   fi
-  "$@" 2> >(while read -r line; do log_error "$line"; done) | while read -r line; do log_info "$line"; done
-  return ${PIPESTATUS[0]}
+  # Ejecutar y capturar salida/estado
+  local output
+  output=$(eval "$cmd" 2>&1)
+  local rc=$?
+  if [ $rc -ne 0 ]; then
+    log_error "Comando fallido ($rc): $cmd"
+    log_error "Salida:\n$output"
+    return $rc
+  else
+    [ -n "$output" ] && log_debug "$output"
+    return 0
+  fi
 }

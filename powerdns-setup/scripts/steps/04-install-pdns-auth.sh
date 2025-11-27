@@ -1,69 +1,63 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
-# Paso 04: Instalación y configuración de PowerDNS Authoritative
-# - Render de /etc/powerdns/pdns.conf desde template
-# - Configuración de backend PostgreSQL
-# - API habilitada con api-key
-# - Habilitar e iniciar servicio
+STEP_KEY="$1"; STEP_TITLE="$2"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../" && pwd)"
 
-source "$REPO_ROOT/scripts/lib/logging.sh"
+source "$ROOT_DIR/config.env"
+source "$ROOT_DIR/scripts/lib/logging.sh"
+source "$ROOT_DIR/scripts/lib/progress.sh"
+source "$ROOT_DIR/scripts/lib/errors.sh"
 
-escape_sed() { echo "$1" | sed -e 's/[\/&]/\\&/g'; }
+render_template(){
+  local tpl="$1"; shift
+  local out="$1"; shift
+  local content
+  content=$(cat "$tpl")
+  content=${content//\{\{PDNS_AUTH_PORT\}\}/$PDNS_AUTH_PORT}
+  content=${content//\{\{DNS_SERVER_IP\}\}/$DNS_SERVER_IP}
+  content=${content//\{\{DB_HOST\}\}/$DB_HOST}
+  content=${content//\{\{DB_PORT\}\}/$DB_PORT}
+  content=${content//\{\{DB_NAME\}\}/$DB_NAME}
+  content=${content//\{\{DB_USER\}\}/$DB_USER}
+  content=${content//\{\{DB_PASSWORD\}\}/$DB_PASSWORD}
+  echo "$content" > "$out"
+}
 
-gen_api_key() { openssl rand -hex 24; }
+main(){
+  # Deshabilitar systemd-resolved y fijar resolv temporal para evitar conflictos
+  run_or_recover "$STEP_TITLE" "$STEP_KEY" "systemctl disable systemd-resolved || true"
+  run_or_recover "$STEP_TITLE" "$STEP_KEY" "systemctl stop systemd-resolved || true"
+  if [ -f /etc/resolv.conf ]; then
+    run_or_recover "$STEP_TITLE" "$STEP_KEY" "chattr -i /etc/resolv.conf || true"
+  fi
+  echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf || true
 
-main() {
-  if ! command -v pdns_server >/dev/null 2>&1; then
-    log_error "pdns_server no está instalado. Ejecuta el paso 02."
-    exit 30
+  # Instalar PowerDNS Authoritative
+  run_or_recover "$STEP_TITLE" "$STEP_KEY" "apt install -y pdns-server"
+
+  # Configurar archivos
+  mkdir -p /etc/powerdns/pdns.d
+  render_template "$ROOT_DIR/configs/pdns.local.gmysql.conf.template" \
+                  "/etc/powerdns/pdns.d/pdns.local.gmysql.conf"
+  # Asegurar puerto y dirección
+  if ! grep -q "^local-port=" /etc/powerdns/pdns.conf 2>/dev/null; then
+    echo "local-port=${PDNS_AUTH_PORT}" >> /etc/powerdns/pdns.conf
+  else
+    sed -i "s/^local-port=.*/local-port=${PDNS_AUTH_PORT}/" /etc/powerdns/pdns.conf
+  fi
+  if ! grep -q "^local-address=" /etc/powerdns/pdns.conf 2>/dev/null; then
+    echo "local-address=${DNS_SERVER_IP}" >> /etc/powerdns/pdns.conf
+  else
+    sed -i "s/^local-address=.*/local-address=${DNS_SERVER_IP}/" /etc/powerdns/pdns.conf
   fi
 
-  # Asegurar directorios
-  sudo mkdir -p /etc/powerdns
-  sudo chown root:root /etc/powerdns
+  # Reiniciar servicio
+  run_or_recover "$STEP_TITLE" "$STEP_KEY" "systemctl restart pdns"
+  run_or_recover "$STEP_TITLE" "$STEP_KEY" "systemctl enable pdns"
 
-  # api-key
-  if [[ -z "${PDNS_API_KEY:-}" ]]; then
-    PDNS_API_KEY=$(gen_api_key)
-    export PDNS_API_KEY
-    log_info "Generada PDNS_API_KEY (oculta en logs)."
-  fi
-
-  # Render template
-  local tpl="$REPO_ROOT/configs/pdns.conf.template"
-  if [[ ! -f "$tpl" ]]; then
-    log_error "No se encuentra el template pdns.conf.template"
-    exit 31
-  fi
-  local out="/etc/powerdns/pdns.conf"
-  sed \
-    -e "s/{{PDNS_AUTH_PORT}}/$(escape_sed "$PDNS_AUTH_PORT")/g" \
-    -e "s/{{PDNS_API_KEY}}/$(escape_sed "$PDNS_API_KEY")/g" \
-    -e "s/{{DB_USER}}/$(escape_sed "$DB_USER")/g" \
-    -e "s/{{DB_NAME}}/$(escape_sed "$DB_NAME")/g" \
-    -e "s/{{DB_PASSWORD}}/$(escape_sed "$DB_PASSWORD")/g" \
-    "$tpl" | sudo tee "$out" >/dev/null
-
-  sudo chmod 640 "$out"
-  sudo chown root:pdns "$out"
-
-  # Habilitar e iniciar
-  log_cmd systemctl enable pdns
-  if ! log_cmd systemctl restart pdns; then
-    log_error "Fallo al iniciar pdns. Mostrando últimos logs:"
-    journalctl -xeu pdns.service | tail -n 50 || true
-    exit 32
-  fi
-
-  # Comprobación básica
-  sleep 1
-  if ! systemctl is-active --quiet pdns; then
-    log_error "pdns no está activo tras el arranque."
-    journalctl -u pdns --no-pager | tail -n 50 || true
-    exit 33
-  fi
-  log_info "PowerDNS Authoritative configurado y en ejecución."
+  progress_set "$STEP_KEY" "completed"
 }
 
 main "$@"

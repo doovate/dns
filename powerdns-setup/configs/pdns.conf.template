@@ -1,27 +1,9 @@
-# PowerDNS Authoritative configuration (template)
-# Managed by powerdns-setup
-
-launch=gpgsql
-config-dir=/etc/powerdns
-setgid=pdns
+# PowerDNS Authoritative main configuration
 setuid=pdns
+setgid=pdns
+launch=
+include-dir=/etc/powerdns/pdns.d
 
-local-address=0.0.0.0
-local-port={{PDNS_AUTH_PORT}}
-
-webserver=yes
-webserver-address=127.0.0.1
-webserver-port=8081
-
-# API for PowerDNS-Admin
-api=yes
-api-key={{PDNS_API_KEY}}
-
-# gpgsql backend
-# Note: password must not contain single quotes. Escaped accordingly by step script
-gpgsql-host=127.0.0.1
-gpgsql-user={{DB_USER}}
-gpgsql-dbname={{DB_NAME}}
-gpgsql-password={{DB_PASSWORD}}
-log-dns-queries=no
-loglevel=4
+# Listen settings (will be appended by installer)
+# local-port={{PDNS_AUTH_PORT}}
+# local-address={{DNS_SERVER_IP}}

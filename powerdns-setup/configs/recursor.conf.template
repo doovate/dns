@@ -1,16 +1,6 @@
-# PowerDNS Recursor configuration (template)
-# Managed by powerdns-setup
-
-setuid=pdns-recursor
-setgid=pdns-recursor
-local-address={{RECURSOR_BIND}}
+# PowerDNS Recursor configuration
+local-address={{DNS_SERVER_IP}}
 local-port={{PDNS_RECURSOR_PORT}}
-
-# Forward public queries to upstream resolvers
-forward-zones-recurse=.= {{DNS_FORWARDER_1}};{{DNS_FORWARDER_2}}
-
-# Send queries for local auth zone to the local authoritative server
-forward-zones={{DNS_ZONE}}=127.0.0.1:{{PDNS_AUTH_PORT}}
-
-# Allow from internal networks
 allow-from={{INTERNAL_NETWORK}},{{VPN_NETWORK}},127.0.0.0/8
+forward-zones={{DNS_ZONE}}=127.0.0.1:{{PDNS_AUTH_PORT}}
+forward-zones-recurse=.={{DNS_FORWARDER_1}};{{DNS_FORWARDER_2}}

@@ -1,0 +1,8 @@
+# PowerDNS gmysql backend configuration
+launch+=gmysql
+gmysql-host={{DB_HOST}}
+gmysql-port={{DB_PORT}}
+gmysql-dbname={{DB_NAME}}
+gmysql-user={{DB_USER}}
+gmysql-password={{DB_PASSWORD}}
+gmysql-dnssec=yes

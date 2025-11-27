@@ -1,226 +1,178 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+# Instalador interactivo PowerDNS para Ubuntu 24.04
+# Ejecuta pasos uno a uno, reanudable, con archivo de progreso
+set -euo pipefail
 
-# PowerDNS Setup - Instalación Paso a Paso con Control Total
-# Orquestador principal: ejecuta 12 pasos independientes, con control interactivo,
-# logging detallado, manejo de errores y reanudación mediante .install_progress
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$SCRIPT_DIR"
 
-REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-cd "$REPO_ROOT"
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/lib/colors.sh"
+source "$ROOT_DIR/scripts/lib/logging.sh"
+source "$ROOT_DIR/scripts/lib/progress.sh"
+source "$ROOT_DIR/scripts/lib/errors.sh"
 
-# Cargar configuración (si existe) y librerías
-if [[ -f config.env ]]; then
-  # shellcheck disable=SC1091
-  source config.env
-fi
+CONFIG_FILE="$ROOT_DIR/config.env"
+PROGRESS_FILE="$ROOT_DIR/.install_progress"
 
-mkdir -p scripts/lib scripts/steps configs configs/zones
-INSTALL_PROGRESS_FILE="${REPO_ROOT}/.install_progress"
-CREDENTIALS_FILE="${REPO_ROOT}/CREDENTIALS.txt"
-
-# Valores por defecto si no están en config.env
-DNS_SERVER_IP=${DNS_SERVER_IP:-192.168.25.60}
-INTERNAL_NETWORK=${INTERNAL_NETWORK:-192.168.24.0/22}
-VPN_NETWORK=${VPN_NETWORK:-10.66.66.0/24}
-DNS_ZONE=${DNS_ZONE:-doovate.com}
-DNS_FORWARDER_1=${DNS_FORWARDER_1:-8.8.8.8}
-DNS_FORWARDER_2=${DNS_FORWARDER_2:-1.1.1.1}
-PDNS_AUTH_PORT=${PDNS_AUTH_PORT:-5300}
-PDNS_RECURSOR_PORT=${PDNS_RECURSOR_PORT:-53}
-WEBUI_PORT=${WEBUI_PORT:-9191}
-DB_TYPE=${DB_TYPE:-postgresql}
-DB_NAME=${DB_NAME:-powerdns}
-DB_USER=${DB_USER:-pdns}
-DB_PASSWORD=${DB_PASSWORD:-}
-ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-ADMIN_EMAIL=${ADMIN_EMAIL:-admin@doovate.com}
-INTERACTIVE_MODE=${INTERACTIVE_MODE:-true}
-VERBOSE_MODE=${VERBOSE_MODE:-true}
-ENABLE_LOGGING=${ENABLE_LOGGING:-true}
-LOG_FILE=${LOG_FILE:-/var/log/powerdns-setup.log}
-DRY_RUN=${DRY_RUN:-false}
-
-# Exportar para que los pasos los vean
-export REPO_ROOT INSTALL_PROGRESS_FILE CREDENTIALS_FILE \
-  DNS_SERVER_IP INTERNAL_NETWORK VPN_NETWORK DNS_ZONE DNS_FORWARDER_1 DNS_FORWARDER_2 \
-  PDNS_AUTH_PORT PDNS_RECURSOR_PORT WEBUI_PORT DB_TYPE DB_NAME DB_USER DB_PASSWORD \
-  ADMIN_USERNAME ADMIN_PASSWORD ADMIN_EMAIL INTERACTIVE_MODE VERBOSE_MODE \
-  ENABLE_LOGGING LOG_FILE DRY_RUN
-
-# Cargar libs
-for lib in colors logging progress errors; do
-  # shellcheck disable=SC1090
-  [[ -f "scripts/lib/${lib}.sh" ]] && source "scripts/lib/${lib}.sh"
-done
-
-show_banner() {
-  echo "$(title_border)"
-  echo "$(title_line)   PowerDNS Setup Paso a Paso v1.0"
-  echo "$(title_line)   Ubuntu 24.04 LTS"
-  echo "$(title_border)"
-}
-
-usage() {
-  cat <<USAGE
-Uso:
-  sudo bash install.sh [--auto] [--resume] [--reset] [--dry-run]
+usage(){
+  cat <<EOF
+Uso: sudo bash install.sh [--auto] [--reset] [--resume] [--dry-run]
 
 Opciones:
-  --auto       Modo automático (no preguntar confirmaciones)
-  --resume     Reanudar desde estado previo (por defecto si existe progreso)
-  --reset      Borrar progreso y reiniciar instalación
-  --dry-run    Simulación: mostrar qué se haría sin ejecutar
-USAGE
+  --auto      Ejecuta en modo automático sin pausas
+  --reset     Reinicia el progreso y comienza desde cero
+  --resume    Continúa desde donde se quedó
+  --dry-run   Muestra lo que haría sin ejecutar cambios
+EOF
 }
 
+# Flags
 AUTO_MODE=false
-RESUME=false
 RESET=false
+RESUME=false
+DRY_RUN=${DRY_RUN:-false}
 
-parse_arguments() {
-  for arg in "$@"; do
-    case "$arg" in
-      --auto) AUTO_MODE=true; INTERACTIVE_MODE=false ;;
-      --resume) RESUME=true ;;
-      --reset) RESET=true ;;
-      --dry-run) DRY_RUN=true ;;
-      -h|--help) usage; exit 0 ;;
-      *) ;;
-    esac
-  done
-}
+for arg in "$@"; do
+  case "$arg" in
+    --auto) AUTO_MODE=true ;;
+    --reset) RESET=true ;;
+    --resume) RESUME=true ;;
+    --dry-run) DRY_RUN=true ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Opción no reconocida: $arg"; usage; exit 1 ;;
+  esac
+done
 
-# Definición de pasos (archivo + título)
-TOTAL_STEPS=12
+# Cargar configuración
+if [ ! -f "$CONFIG_FILE" ]; then
+  echo "Falta $CONFIG_FILE. Copia y edita antes de continuar." >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+
+# Aplicar DRY_RUN al entorno de logs
+export DRY_RUN AUTO_MODE
+
+# Reset/resume
+if [ "$RESET" = true ]; then
+  progress_reset
+fi
+progress_init
+
+# Registrar pasos
 STEPS=(
-  "01-system-check:Verificación del sistema"
-  "02-install-deps:Instalación de dependencias"
-  "03-setup-db:Configuración de base de datos"
-  "04-install-pdns-auth:Instalación PowerDNS Authoritative"
-  "05-install-pdns-recursor:Instalación PowerDNS Recursor"
-  "06-configure-zones:Configuración de zonas DNS"
-  "07-install-pdns-admin:Instalación PowerDNS-Admin"
-  "08-setup-nginx:Configuración de nginx"
-  "09-setup-firewall:Configuración de firewall"
-  "10-generate-creds:Generación de credenciales"
-  "11-start-services:Inicio de servicios"
-  "12-final-tests:Pruebas finales"
+  "01:01-system-check:Verificación del sistema"
+  "02:02-install-deps:Instalación de dependencias base"
+  "03:03-setup-db:Configuración de base de datos"
+  "04:04-install-pdns-auth:Instalación PowerDNS Authoritative"
+  "05:05-install-pdns-recursor:Instalación PowerDNS Recursor"
+  "06:06-configure-zones:Configuración de zonas DNS"
+  "07:07-install-pdns-admin:Instalación PowerDNS-Admin"
+  "08:08-setup-nginx:Configuración Nginx + SSL"
+  "09:09-setup-firewall:Configuración Firewall"
+  "10:10-generate-creds:Generación de credenciales"
+  "11:11-start-services:Inicio de servicios"
+  "12:12-final-tests:Pruebas finales"
 )
 
-ask_continue() {
-  if [[ "$AUTO_MODE" == true || "$INTERACTIVE_MODE" != true ]]; then
-    return 0
-  fi
-  read -r -p "¿Continuar con este paso? [S/n]: " ans || true
-  [[ -z "$ans" || "$ans" =~ ^[sS]$ ]]
-}
+TOTAL=${#STEPS[@]}
+CURRENT=0
 
-show_step_header() {
-  local idx=$1
-  local title=$2
-  echo "$(title_border)"
-  printf "║  %s PASO %d/%d: %s %-*s║\n" "$(bold)" "$idx" "$TOTAL_STEPS" "$title" $((44-${#title})) "$(normal)"
-  echo "$(title_border)"
-}
+run_step(){
+  local idx="$1"; local key="$2"; local title="$3"; shift 3
+  CURRENT=$((CURRENT+1))
+  local step_key="STEP_${idx}_$(echo "$key" | tr 'a-z-' 'A-Z_')"
+  local state
+  state=$(progress_get "$step_key")
+  state=${state:-pending}
 
-progress_bar() {
-  local current=$1 total=$2 label=$3
-  local width=24
-  local filled=$(( current * width / total ))
-  local empty=$(( width - filled ))
-  printf "[%s%s] %d%% (%d/%d) - %s\n" \
-    "$(printf '█%.0s' $(seq 1 $filled))" "$(printf '░%.0s' $(seq 1 $empty))" \
-    $(( current * 100 / total )) "$current" "$total" "$label"
-}
+  local desc=""
+  case "$key" in
+    01-system-check)
+      desc=$'- Permisos root/sudo\n- SO Ubuntu 24.04\n- Internet, espacio, puertos, RAM'
+      ;;
+    02-install-deps)
+      desc=$'- apt update\n- instalar herramientas base'
+      ;;
+    03-setup-db)
+      desc=$'- MariaDB + pdns-backend-mysql\n- Crear BD y usuario\n- Importar esquema'
+      ;;
+    04-install-pdns-auth)
+      desc=$'- Instalar pdns-server\n- Configurar MySQL\n- Puerto 5300'
+      ;;
+    05-install-pdns-recursor)
+      desc=$'- Instalar pdns-recursor\n- Forwarders públicos\n- Integración con auth'
+      ;;
+    06-configure-zones)
+      desc=$'- Crear zona inicial y registros'
+      ;;
+    07-install-pdns-admin)
+      desc=$'- Python 3.12 con venv\n- PowerDNS-Admin backend y assets'
+      ;;
+    08-setup-nginx)
+      desc=$'- Nginx reverse proxy con SSL'
+      ;;
+    09-setup-firewall)
+      desc=$'- UFW reglas para DNS y Web UI'
+      ;;
+    10-generate-creds)
+      desc=$'- Generar contraseñas y guardar CREDENTIALS.txt'
+      ;;
+    11-start-services)
+      desc=$'- Habilitar y arrancar servicios'
+      ;;
+    12-final-tests)
+      desc=$'- Tests de servicios y resolución DNS'
+      ;;
+  esac
 
-execute_step() {
-  local step_key="$1"; local step_file; step_file="${step_key%%:*}"; local step_title; step_title="${step_key#*:}"
-  local idx="$2"
-  show_step_header "$idx" "$step_title"
-  show_step_status "$step_file"
+  box_top "PASO ${CURRENT}/${TOTAL}: ${title}"
+  echo "Estado actual: [ ${state^^} ]"
+  echo
+  echo -e "$desc"
 
-  if is_step_completed "$step_file"; then
-    show_step_skipped "$step_title"
-    return 0
-  fi
-
-  if ! ask_continue; then
-    mark_step_pending "$step_file"
-    echo "Saltado por el usuario."
-    return 0
-  fi
-
-  local script_path="scripts/steps/${step_file}.sh"
-  # Asegurar permisos de ejecución y finales de línea Unix si el archivo existe
-  if [[ -f "$script_path" && ! -x "$script_path" ]]; then
-    chmod +x "$script_path" || true
-  fi
-  if [[ -f "$script_path" ]]; then
-    # Normalizar finales de línea (convertir CRLF a LF)
-    sed -i 's/\r$//' "$script_path" 2>/dev/null || true
-  fi
-  # Verificaciones claras
-  if [[ ! -f "$script_path" ]]; then
-    log_error "Script de paso no encontrado: $script_path"
-    mark_step_failed "$step_file" "script_not_found"
-    return 1
-  fi
-  if [[ ! -x "$script_path" ]]; then
-    log_error "Script de paso no es ejecutable: $script_path (intenté chmod +x)"
-    mark_step_failed "$step_file" "script_not_executable"
-    return 1
-  fi
-
-  progress_bar "$idx" "$TOTAL_STEPS" "$step_title..."
-
-  if [[ "$DRY_RUN" == true ]]; then
-    log_info "[DRY-RUN] Ejecutaría: $script_path"
-    mark_step_completed "$step_file"
-    show_step_success "$step_title"
+  if [ "$RESUME" = true ] && [[ "$state" == completed* ]]; then
+    log_info "Saltando ${key} (ya completado)"
     return 0
   fi
 
-  if bash "$script_path"; then
-    mark_step_completed "$step_file"
-    show_step_success "$step_title"
-  else
-    local exit_code=$?
-    show_step_error "$step_title" "$exit_code"
-    handle_error "$step_file" "$exit_code"
+  if ! step_prompt "PASO ${CURRENT}/${TOTAL}: ${title}" "$state" "$desc"; then
+    log_warn "Usuario canceló el paso ${key}"
+    return 0
   fi
+
+  local script="$ROOT_DIR/scripts/steps/${idx}-${key}.sh"
+  if [ ! -x "$script" ]; then
+    log_warn "Script de paso no encontrado: $script (marcando como skipped)"
+    progress_set "$step_key" "skipped"
+    return 0
+  fi
+
+  # Ejecutar el paso
+  "$script" "$step_key" "$title"
 }
 
-show_summary() {
-  echo "$(title_border)"
-  echo "$(title_line)           RESUMEN DE INSTALACIÓN"
-  echo "$(title_border)"
-  local completed=$(count_steps_by_status completed)
-  echo "Pasos completados: ${completed}/${TOTAL_STEPS}"
-  list_steps_summary
-  echo ""
-  echo "🌐 Acceso a PowerDNS-Admin:"
-  echo "   URL: https://${DNS_SERVER_IP}:${WEBUI_PORT}"
-  echo "   Usuario: ${ADMIN_USERNAME}"
-  echo "   Contraseña: [ver CREDENTIALS.txt]"
-  echo ""
-  echo "📄 Credenciales: ${CREDENTIALS_FILE}"
-  echo "📊 Log de instalación: ${LOG_FILE}"
-}
-
-main() {
-  parse_arguments "$@"
-  [[ "$RESET" == true ]] && reset_progress
-  load_progress
-  init_logging
-  show_banner
-
-  local i=0
-  for step in "${STEPS[@]}"; do
-    i=$((i+1))
-    execute_step "$step" "$i"
+main(){
+  local start_ts=$(date +%s)
+  for s in "${STEPS[@]}"; do
+    IFS=":" read -r idx key title <<< "$s"
+    run_step "$idx" "$key" "$title"
   done
-  show_summary
+  local end_ts=$(date +%s)
+  local elapsed=$((end_ts - start_ts))
+  echo
+  echo "╔════════════════════════════════════════════════════════════╗"
+  echo "║           RESUMEN DE INSTALACIÓN                           ║"
+  echo "╚════════════════════════════════════════════════════════════╝"
+  local done_count
+  done_count=$(grep -c "=completed" "$PROGRESS_FILE" 2>/dev/null || echo 0)
+  echo "Pasos completados: ${done_count}/${TOTAL}"
+  echo "Tiempo total: ${elapsed}s"
+  echo
+  echo "📊 Log: ${LOG_FILE}"
+  echo "📄 Credenciales (si se generaron): $ROOT_DIR/CREDENTIALS.txt"
 }
 
 main "$@"

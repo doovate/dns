@@ -1,71 +1,79 @@
 #!/usr/bin/env bash
-# Progress tracking stored in .install_progress
+# Gestión de progreso .install_progress y utilidades de paso
 
-ensure_progress_file() {
-  [[ -f "$INSTALL_PROGRESS_FILE" ]] || echo "" > "$INSTALL_PROGRESS_FILE"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../" && pwd)"
+PROGRESS_FILE="$ROOT_DIR/.install_progress"
+
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/lib/logging.sh"
+
+progress_init(){
+  if [ ! -f "$PROGRESS_FILE" ]; then
+    echo "# Archivo de progreso de instalación" > "$PROGRESS_FILE"
+  fi
 }
 
-load_progress() {
-  ensure_progress_file
-}
-
-reset_progress() {
-  rm -f "$INSTALL_PROGRESS_FILE"
-  touch "$INSTALL_PROGRESS_FILE"
-}
-
-_set_step_status() {
-  local step="$1"; local status="$2"; local detail="${3:-}"
-  ensure_progress_file
-  # Remove existing line for this step
-  grep -v -E "^STEP_${step}=" "$INSTALL_PROGRESS_FILE" >"$INSTALL_PROGRESS_FILE.tmp" 2>/dev/null || true
-  mv "$INSTALL_PROGRESS_FILE.tmp" "$INSTALL_PROGRESS_FILE" 2>/dev/null || true
-  if [[ -n "$detail" ]]; then
-    echo "STEP_${step}=${status}:${detail}" >> "$INSTALL_PROGRESS_FILE"
+progress_set(){
+  local key="$1"; local value="$2"
+  progress_init
+  # eliminar línea existente
+  if grep -q "^${key}=" "$PROGRESS_FILE" 2>/dev/null; then
+    sed -i "s#^${key}=.*#${key}=${value}#" "$PROGRESS_FILE"
   else
-    echo "STEP_${step}=${status}" >> "$INSTALL_PROGRESS_FILE"
+    echo "${key}=${value}" >> "$PROGRESS_FILE"
+  fi
+  log_info "Estado actualizado: ${key}=${value}"
+}
+
+progress_get(){
+  local key="$1"
+  if [ -f "$PROGRESS_FILE" ]; then
+    grep -E "^${key}=" "$PROGRESS_FILE" | head -n1 | cut -d'=' -f2-
   fi
 }
 
-mark_step_completed() { _set_step_status "$1" completed; }
-mark_step_pending() { _set_step_status "$1" pending; }
-mark_step_failed() { _set_step_status "$1" failed "$2"; }
-
-is_step_completed() {
-  local step="$1"
-  [[ -f "$INSTALL_PROGRESS_FILE" ]] || return 1
-  grep -q -E "^STEP_${step}=completed" "$INSTALL_PROGRESS_FILE"
+progress_reset(){
+  rm -f "$PROGRESS_FILE"
+  progress_init
+  log_warn "Progreso reiniciado"
 }
 
-show_step_status() {
-  local step="$1"
-  local val=""
-  if [[ -f "$INSTALL_PROGRESS_FILE" ]]; then
-    val=$(grep -E "^STEP_${step}=" "$INSTALL_PROGRESS_FILE" | head -n1 | cut -d'=' -f2- || true)
-  fi
-  if [[ -z "$val" ]]; then
-    echo "Estado actual: [ PENDIENTE ]"
+step_prompt(){
+  local title="$1"; local status="$2"; local description="$3"
+  echo
+  echo "╔════════════════════════════════════════════════════════════╗"
+  echo "║  ${title}"
+  echo "╚════════════════════════════════════════════════════════════╝"
+  echo "Estado actual: [ ${status} ]"
+  echo
+  echo -e "$description"
+  echo
+  if [ "$AUTO_MODE" = true ]; then
+    REPLY="s"
   else
-    case "$val" in
-      completed*) echo "Estado actual: [ COMPLETADO ]" ;;
-      failed*) echo "Estado actual: [ FALLÓ ] ($val)" ;;
-      pending*) echo "Estado actual: [ PENDIENTE ]" ;;
-      *) echo "Estado actual: [ $val ]" ;;
-    esac
+    read -r -p "¿Continuar con este paso? [S/n]: " REPLY
   fi
+  [[ -z "$REPLY" || "$REPLY" =~ ^[sS]$ ]]
 }
 
-count_steps_by_status() {
-  local status="$1"
-  [[ -f "$INSTALL_PROGRESS_FILE" ]] || { echo 0; return; }
-  grep -c -E "=${status}(=|:|$)" "$INSTALL_PROGRESS_FILE" || echo 0
-}
-
-list_steps_summary() {
-  echo "Resumen de pasos:"
-  if [[ ! -s "$INSTALL_PROGRESS_FILE" ]]; then
-    echo "  (sin datos)"
-    return
+step_run(){
+  local step_id="$1"; shift
+  local cmd="$*"
+  local rc=0
+  if [ "$DRY_RUN" = true ]; then
+    log_info "DRY-RUN: ${step_id} se marcaría como completed"
+    progress_set "$step_id" "completed"
+    return 0
   fi
-  sort "$INSTALL_PROGRESS_FILE" | sed -E 's/^STEP_([0-9]{2}-[^=]+)=(.*)$/  \1 -> \2/'
+  eval "$cmd"
+  rc=$?
+  if [ $rc -eq 0 ]; then
+    progress_set "$step_id" "completed"
+    log_success "${step_id} completado"
+    return 0
+  else
+    progress_set "$step_id" "failed:$rc"
+    return $rc
+  fi
 }
