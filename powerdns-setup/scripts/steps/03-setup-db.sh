@@ -29,10 +29,44 @@ case "$DB_TYPE" in
     # Ensure service
     run_cmd systemctl enable postgresql
     run_cmd systemctl start postgresql
-    # Create DB and user idempotently
-    run_cmd sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || run_cmd sudo -u postgres createdb "$DB_NAME"
-    run_cmd sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER'" | grep -q 1 || run_cmd sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';"
-    run_cmd sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+
+    # Create user and database idempotently without using pipelines (set -euo pipefail safe)
+    # Check if role exists
+    set +e
+    pg_user_exists=$(sudo -u postgres psql -Atc "SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER';" 2>/dev/null)
+    pg_user_rc=$?
+    set -e
+    if [ $pg_user_rc -ne 0 ]; then
+      log_warn "No se pudo verificar existencia del usuario en PostgreSQL (rc=$pg_user_rc). Intentando crearlo igualmente."
+      run_cmd sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';" || true
+    else
+      if [ "$pg_user_exists" = "1" ]; then
+        log_info "Usuario de BD '$DB_USER' ya existe"
+      else
+        run_cmd sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';"
+      fi
+    fi
+
+    # Check if database exists
+    set +e
+    pg_db_exists=$(sudo -u postgres psql -Atc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME';" 2>/dev/null)
+    pg_db_rc=$?
+    set -e
+    if [ $pg_db_rc -ne 0 ]; then
+      log_warn "No se pudo verificar existencia de la base de datos en PostgreSQL (rc=$pg_db_rc). Intentando crearla igualmente."
+      run_cmd sudo -u postgres createdb -O "$DB_USER" "$DB_NAME" || true
+    else
+      if [ "$pg_db_exists" = "1" ]; then
+        log_info "Base de datos '$DB_NAME' ya existe"
+      else
+        run_cmd sudo -u postgres createdb -O "$DB_USER" "$DB_NAME"
+      fi
+    fi
+
+    # Ensure privileges (idempotent)
+    run_cmd sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;" || true
+    # Grant on public schema as well (common requirement)
+    run_cmd sudo -u postgres psql -d "$DB_NAME" -c "GRANT ALL ON SCHEMA public TO $DB_USER;" || true
     ;;
   mysql|mariadb)
     if command -v mysql >/dev/null 2>&1; then
