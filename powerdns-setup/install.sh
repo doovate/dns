@@ -103,7 +103,7 @@ apt_install_packages() {
     postgresql postgresql-contrib \
     pdns-server pdns-backend-pgsql pdns-recursor \
     nginx openssl \
-    git python3-venv python3-pip python3-dev build-essential pkg-config libmariadb-dev libpq-dev libffi-dev libldap2-dev libsasl2-dev libssl-dev \
+    git python3-venv python3-pip python3-dev python3-distutils build-essential pkg-config libmariadb-dev libpq-dev libffi-dev libldap2-dev libsasl2-dev libssl-dev \
     ufw
 }
 
@@ -211,6 +211,27 @@ SQL
   if ! sudo -u postgres psql -d "$DB_NAME" -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='domains'" | grep -q 1; then
     warn "PowerDNS schema verification failed: table 'domains' not found in $DB_NAME. Check PostgreSQL logs."
   fi
+
+  # Ensure ownership and privileges for PDNS user (fixes permission denied on 'domains')
+  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "ALTER DATABASE \"$DB_NAME\" OWNER TO \"$DB_USER\";" || true
+  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON DATABASE \"$DB_NAME\" TO \"$DB_USER\";" || true
+  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "GRANT USAGE, CREATE ON SCHEMA public TO \"$DB_USER\";" || true
+  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "ALTER SCHEMA public OWNER TO \"$DB_USER\";" || true
+  # Change ownership of existing tables and sequences in public schema to PDNS user
+  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 <<SQL || true
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT c.relkind, format('%I.%I', n.nspname, c.relname) AS fqname
+           FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+           WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S')
+  LOOP
+    EXECUTE 'ALTER ' || CASE WHEN r.relkind='S' THEN 'SEQUENCE' ELSE 'TABLE' END || ' ' || r.fqname || ' OWNER TO "${DB_USER}"';
+  END LOOP;
+END$$;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "${DB_USER}";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "${DB_USER}";
+SQL
 
   # Separate DB for PowerDNS-Admin
   PDA_DB_NAME=${PDA_DB_NAME:-powerdns_admin}
