@@ -1,0 +1,24 @@
+# PowerDNS Authoritative configuration (generated)
+# Database configuration
+launch=gmysql,gpgsql
+# The correct backend will use DSN below; the other will be ignored if not installed
+
+gmysql-dnssec=yes
+gpgsql-dnssec=yes
+
+gmysql-connection-string=${DB_DSN}
+gpgsql-connection-string=${DB_DSN}
+
+# Listen settings
+daemon=yes
+local-address=0.0.0.0
+local-port=${PDNS_AUTH_PORT}
+
+# Security
+allow-axfr-ips=${INTERNAL_NETWORK},${VPN_NETWORK}
+version-string=anonymous
+api=yes
+api-key=${PDNS_API_KEY}
+webserver=yes
+webserver-address=127.0.0.1
+webserver-port=8081
