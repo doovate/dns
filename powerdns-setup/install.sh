@@ -103,7 +103,7 @@ apt_install_packages() {
     postgresql postgresql-contrib \
     pdns-server pdns-backend-pgsql pdns-recursor \
     nginx openssl \
-    git python3-venv python3-pip python3-dev build-essential \
+    git python3-venv python3-pip python3-dev build-essential pkg-config libmariadb-dev libpq-dev \
     ufw
 }
 
@@ -112,6 +112,8 @@ setup_postgres() {
   # Create DB and user for PDNS
   sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 || \
     sudo -u postgres psql -c "CREATE ROLE $DB_USER WITH LOGIN PASSWORD '$DB_PASSWORD';"
+  # Always ensure the password matches the current config to avoid auth failures on reruns
+  sudo -u postgres psql -c "ALTER ROLE $DB_USER WITH PASSWORD '$DB_PASSWORD';" >/dev/null
   sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 || \
     sudo -u postgres createdb -O "$DB_USER" "$DB_NAME"
 
