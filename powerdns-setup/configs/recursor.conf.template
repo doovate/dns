@@ -1,6 +1,0 @@
-# PowerDNS Recursor configuration
-local-address={{DNS_SERVER_IP}}
-local-port={{PDNS_RECURSOR_PORT}}
-allow-from={{INTERNAL_NETWORK}},{{VPN_NETWORK}},127.0.0.0/8
-forward-zones={{DNS_ZONE}}=127.0.0.1:{{PDNS_AUTH_PORT}}
-forward-zones-recurse=.={{DNS_FORWARDER_1}};{{DNS_FORWARDER_2}}

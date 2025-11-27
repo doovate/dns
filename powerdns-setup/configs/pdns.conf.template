@@ -1,9 +1,0 @@
-# PowerDNS Authoritative main configuration
-setuid=pdns
-setgid=pdns
-launch=
-include-dir=/etc/powerdns/pdns.d
-
-# Listen settings (will be appended by installer)
-# local-port={{PDNS_AUTH_PORT}}
-# local-address={{DNS_SERVER_IP}}
