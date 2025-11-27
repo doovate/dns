@@ -1,37 +1,37 @@
-# Uso de PowerDNS-Admin y utilidades
+# Uso básico de PowerDNS-Admin
 
-## Acceso web
-- URL: https://<PDNSA_FQDN>
-- Usuario inicial: PDNSA_ADMIN_USER (definido en config.env)
-- Contraseña inicial: PDNSA_ADMIN_PASSWORD
+## Acceso
+- URL: https://<DNS_SERVER_IP>:<WEBUI_PORT>
+- Usuario: ver CREDENTIALS.txt (por defecto admin)
+- Contraseña: ver CREDENTIALS.txt
 
-Tras el primer login, cambie la contraseña y configure autenticación adicional si se requiere.
+Acepta la advertencia del navegador por certificado autofirmado.
 
 ## Crear zona
 1. Inicie sesión en PowerDNS-Admin.
-2. Vaya a Domains -> Create Domain.
-3. Cree la zona `doovate.com` si no existe o edite registros.
-4. Use Records para añadir A/AAAA/CNAME/MX/etc.
+2. Vaya a Domains -> Add Domain.
+3. Seleccione Native Zone e ingrese `doovate.com` (o la definida en DNS_ZONE).
+4. Guarde.
 
-## DNS desde clientes
-- Configure a sus clientes para usar el servidor DNS `DNS_SERVER_IP`.
-- Las consultas a dominios internos (`doovate.com`) se resuelven en el Authoritative.
-- Los dominios públicos se reenvían a los forwarders configurados.
+El instalador ya crea la zona y registros de ejemplo si no existen.
 
-## Logs
-- PowerDNS: journalctl -u pdns -u pdns-recursor
-- Nginx: /var/log/nginx/pdns-admin.access.log, pdns-admin.error.log
-- PowerDNS-Admin: revisar logs de gunicorn con journalctl -u powerdns-admin
+## Añadir registros
+1. Entre a la zona `doovate.com`.
+2. Add Record -> Tipo A -> Nombre `host` -> Valor `IP` -> TTL 3600.
+3. Guarde y aplique.
 
-## Comandos útiles
-- Reiniciar servicios: sudo systemctl restart pdns pdns-recursor powerdns-admin nginx
-- Ver estado: sudo systemctl status pdns pdns-recursor powerdns-admin nginx
-- Probar DNS: scripts/test-dns.sh
-- Healthcheck: scripts/healthcheck.sh
-- Backup: scripts/backup.sh
-- Restore: scripts/restore.sh <archivo>
+## Probar resolución
+Desde el servidor:
+```
+sudo bash scripts/test-dns.sh
+```
 
-## Seguridad
-- Ajuste UFW según su red.
-- Revise y limite accesos en Nginx si expone el GUI a Internet.
-- Mantenga actualizado el sistema (unattended-upgrades recomendado).
+O manualmente:
+```
+dig +short @127.0.0.1 -p 53 dv-vpn.doovate.com A
+```
+
+## Mantenimiento
+- Reiniciar servicios: `sudo systemctl restart pdns pdns-recursor powerdns-admin nginx`
+- Ver estado: `sudo bash scripts/healthcheck.sh`
+- Ver logs: `sudo journalctl -u pdns -e -f`

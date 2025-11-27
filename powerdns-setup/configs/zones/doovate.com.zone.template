@@ -7,10 +7,9 @@ $TTL 3600
         1209600    ; expire
         300 )      ; minimum
 
-; NS
-@   IN NS dns.doovate.com.
+@       IN NS dns.doovate.com.
+dns     IN A 192.168.24.60
 
-; A records
-dns IN A 192.168.24.60
-sv-vpn IN A 192.168.24.50
-dv-vpn IN A 192.168.24.20
+; Sample records (will be ensured by installer too)
+dv-vpn  IN A 192.168.24.20
+sv-vpn  IN A 192.168.24.50

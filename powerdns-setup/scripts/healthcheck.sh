@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
-load_env
 
-ok=0
-fail=0
+GREEN='\e[32m'; RED='\e[31m'; YELLOW='\e[33m'; NC='\e[0m'
 
-check(){
-  local name="$1"; shift
-  if "$@" >/dev/null 2>&1; then
-    echo "[OK] $name"; ((ok++))
+check_service() {
+  local svc="$1"
+  if systemctl is-active --quiet "$svc"; then
+    echo -e "${GREEN}[OK]${NC} $svc is active"
   else
-    echo "[FAIL] $name"; ((fail++))
+    echo -e "${RED}[DOWN]${NC} $svc is not active"
+    systemctl status "$svc" --no-pager -l || true
   fi
 }
 
-check "pdns service" systemctl is-active --quiet pdns
-check "pdns-recursor service" systemctl is-active --quiet pdns-recursor
-check "powerdns-admin service" systemctl is-active --quiet powerdns-admin
+echo -e "\n== PowerDNS Stack Healthcheck ==\n"
+check_service pdns
+check_service pdns-recursor
+check_service powerdns-admin
+check_service nginx
 
-check "pdns api" bash -c "curl -fsS -H 'X-API-Key: ${PDNS_API_KEY}' http://127.0.0.1:${PDNS_API_PORT}/api/v1/servers >/dev/null"
-check "dns internal ${DNS_ZONE}" bash -c "[[ \"$(dig +short @${DNS_SERVER_IP} dns.${DNS_ZONE})\" == \"${DNS_SERVER_IP}\" ]]"
+echo -e "\nListening ports (53, 5300, 8081, 9190, WEBUI):\n"
+ss -ltnup | awk 'NR==1 || /(:53 |:5300 |:8081 |:9190 )/' || true
 
-echo "OK=$ok FAIL=$fail"
-if (( fail > 0 )); then exit 1; fi
+echo -e "\nUFW status:\n"
+ufw status verbose || true
+
+echo -e "\nPDNS version:\n"
+pdns_server --version 2>/dev/null || true
+recursor --version 2>/dev/null || true

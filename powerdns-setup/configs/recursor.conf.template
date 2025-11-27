@@ -1,28 +1,19 @@
 # PowerDNS Recursor configuration (template)
-# Generated from config.env
+# Rendered by install.sh using values from config.env
 
 setuid=pdns
 setgid=pdns
 
-# Listen on all interfaces; UFW and ACLs will restrict access
+# Listen on all interfaces for client queries
 local-address=0.0.0.0
-local-port={{RECURSOR_PORT}}
+local-port={{PDNS_RECURSOR_PORT}}
 
-# Only allow queries from internal networks
-allow-from={{INTERNAL_NETWORK_CIDR}},{{VPN_NETWORK_CIDR}},127.0.0.0/8,::1
+# Forward unresolved queries to public resolvers
+forward-zones-recurse=.= {{DNS_FORWARDER_1}};{{DNS_FORWARDER_2}}
 
-# Forward public domains to upstream resolvers
-forward-zones-recurse=.= {{FORWARDERS}}
-
-# Send internal zone to authoritative server on localhost:{{AUTHORITATIVE_PORT}}
-forward-zones={{DNS_ZONE}}=127.0.0.1:{{AUTHORITATIVE_PORT}}
-
-# Misc hardening
-use-incoming-edns-subnet=no
-use-ecs-when-forwarding=no
-hide-id=yes
-max-qperq=20
+# Forward internal zone to local authoritative
+forward-zones={{DNS_ZONE}}=127.0.0.1:{{PDNS_AUTH_PORT}}
 
 # Logging
-loglevel=3
+log-common-errors=yes
 quiet=no
