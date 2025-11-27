@@ -28,3 +28,19 @@ title_line() {
   local spaces=""; for _ in $(seq 1 $width); do spaces+=" "; done
   echo "║${spaces}║"
 }
+
+# UI helpers for step results
+show_step_success() {
+  local title="$1"
+  printf "%s[✓] %s%s\n" "$(green)" "${title} COMPLETADO" "$(normal)"
+}
+
+show_step_skipped() {
+  local title="$1"
+  printf "%s[≡] %s%s\n" "$(yellow)" "${title} (saltado, ya estaba completado)" "$(normal)"
+}
+
+show_step_error() {
+  local title="$1"; local code="$2"
+  printf "%s[✗] %s (código %s)%s\n" "$(red)" "$title" "$code" "$(normal)"
+}
