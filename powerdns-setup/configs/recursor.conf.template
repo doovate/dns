@@ -1,19 +1,16 @@
 # PowerDNS Recursor configuration (template)
-# Rendered by install.sh using values from config.env
+# Managed by powerdns-setup
 
-setuid=pdns
-setgid=pdns
-
-# Listen on all interfaces for client queries
-local-address=0.0.0.0
+setuid=pdns-recursor
+setgid=pdns-recursor
+local-address={{RECURSOR_BIND}}
 local-port={{PDNS_RECURSOR_PORT}}
 
-# Forward unresolved queries to public resolvers
+# Forward public queries to upstream resolvers
 forward-zones-recurse=.= {{DNS_FORWARDER_1}};{{DNS_FORWARDER_2}}
 
-# Forward internal zone to local authoritative
+# Send queries for local auth zone to the local authoritative server
 forward-zones={{DNS_ZONE}}=127.0.0.1:{{PDNS_AUTH_PORT}}
 
-# Logging
-log-common-errors=yes
-quiet=no
+# Allow from internal networks
+allow-from={{INTERNAL_NETWORK}},{{VPN_NETWORK}},127.0.0.0/8

@@ -1,44 +1,27 @@
 # PowerDNS Authoritative configuration (template)
-# Rendered by install.sh using values from config.env
+# Managed by powerdns-setup
 
-setuid=pdns
+launch=gpgsql
+config-dir=/etc/powerdns
 setgid=pdns
+setuid=pdns
 
-# Listen on all interfaces, custom port
 local-address=0.0.0.0
 local-port={{PDNS_AUTH_PORT}}
 
-# Backend: PostgreSQL or MySQL (PostgreSQL by defecto)
-launch=gpgsql
-# For MySQL use: launch=gmysql
-
-# PostgreSQL settings
-gpgsql-host=127.0.0.1
-gpgsql-port=5432
-gpgsql-dbname={{DB_NAME}}
-gpgsql-user={{DB_USER}}
-gpgsql-password={{DB_PASSWORD}}
-
-# MySQL settings (ignored if using PostgreSQL)
-gmysql-host=127.0.0.1
-gmysql-port=3306
-gmysql-dbname={{DB_NAME}}
-gmysql-user={{DB_USER}}
-gmysql-password={{DB_PASSWORD}}
-
-daemon=yes
-master=no
-slave=no
-version-string=powerdns
-
-# API / Webserver
-api=yes
-api-key={{PDNS_API_KEY}}
 webserver=yes
 webserver-address=127.0.0.1
 webserver-port=8081
 
-# Security / Misc
-disable-axfr=yes
-allow-axfr-ips=
+# API for PowerDNS-Admin
+api=yes
+api-key={{PDNS_API_KEY}}
+
+# gpgsql backend
+# Note: password must not contain single quotes. Escaped accordingly by step script
+gpgsql-host=127.0.0.1
+gpgsql-user={{DB_USER}}
+gpgsql-dbname={{DB_NAME}}
+gpgsql-password={{DB_PASSWORD}}
+log-dns-queries=no
 loglevel=4

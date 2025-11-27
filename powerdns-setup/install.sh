@@ -1,536 +1,212 @@
 #!/usr/bin/env bash
-# Automated installer for a professional PowerDNS stack on Ubuntu 24.04 LTS
-# Components: PowerDNS Authoritative, PowerDNS Recursor, PostgreSQL, PowerDNS-Admin, Nginx (SSL), UFW
-# Usage: sudo bash install.sh
+set -Eeuo pipefail
 
-set -euo pipefail
+# PowerDNS Setup - Instalación Paso a Paso con Control Total
+# Orquestador principal: ejecuta 12 pasos independientes, con control interactivo,
+# logging detallado, manejo de errores y reanudación mediante .install_progress
 
-REPO_ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/config.env"
-CREDENTIALS_FILE="$REPO_ROOT_DIR/CREDENTIALS.txt"
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$REPO_ROOT"
 
-require_root() {
-  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-    echo "[ERROR] This installer must be run as root. Use: sudo bash install.sh" >&2
-    exit 1
-  fi
+# Cargar configuración (si existe) y librerías
+if [[ -f config.env ]]; then
+  # shellcheck disable=SC1091
+  source config.env
+fi
+
+mkdir -p scripts/lib scripts/steps configs configs/zones
+INSTALL_PROGRESS_FILE="${REPO_ROOT}/.install_progress"
+CREDENTIALS_FILE="${REPO_ROOT}/CREDENTIALS.txt"
+
+# Valores por defecto si no están en config.env
+DNS_SERVER_IP=${DNS_SERVER_IP:-192.168.25.60}
+INTERNAL_NETWORK=${INTERNAL_NETWORK:-192.168.24.0/22}
+VPN_NETWORK=${VPN_NETWORK:-10.66.66.0/24}
+DNS_ZONE=${DNS_ZONE:-doovate.com}
+DNS_FORWARDER_1=${DNS_FORWARDER_1:-8.8.8.8}
+DNS_FORWARDER_2=${DNS_FORWARDER_2:-1.1.1.1}
+PDNS_AUTH_PORT=${PDNS_AUTH_PORT:-5300}
+PDNS_RECURSOR_PORT=${PDNS_RECURSOR_PORT:-53}
+WEBUI_PORT=${WEBUI_PORT:-9191}
+DB_TYPE=${DB_TYPE:-postgresql}
+DB_NAME=${DB_NAME:-powerdns}
+DB_USER=${DB_USER:-pdns}
+DB_PASSWORD=${DB_PASSWORD:-}
+ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+ADMIN_EMAIL=${ADMIN_EMAIL:-admin@doovate.com}
+INTERACTIVE_MODE=${INTERACTIVE_MODE:-true}
+VERBOSE_MODE=${VERBOSE_MODE:-true}
+ENABLE_LOGGING=${ENABLE_LOGGING:-true}
+LOG_FILE=${LOG_FILE:-/var/log/powerdns-setup.log}
+DRY_RUN=${DRY_RUN:-false}
+
+# Exportar para que los pasos los vean
+export REPO_ROOT INSTALL_PROGRESS_FILE CREDENTIALS_FILE \
+  DNS_SERVER_IP INTERNAL_NETWORK VPN_NETWORK DNS_ZONE DNS_FORWARDER_1 DNS_FORWARDER_2 \
+  PDNS_AUTH_PORT PDNS_RECURSOR_PORT WEBUI_PORT DB_TYPE DB_NAME DB_USER DB_PASSWORD \
+  ADMIN_USERNAME ADMIN_PASSWORD ADMIN_EMAIL INTERACTIVE_MODE VERBOSE_MODE \
+  ENABLE_LOGGING LOG_FILE DRY_RUN
+
+# Cargar libs
+for lib in colors logging progress errors; do
+  # shellcheck disable=SC1090
+  [[ -f "scripts/lib/${lib}.sh" ]] && source "scripts/lib/${lib}.sh"
+done
+
+show_banner() {
+  echo "$(title_border)"
+  echo "$(title_line)   PowerDNS Setup Paso a Paso v1.0"
+  echo "$(title_line)   Ubuntu 24.04 LTS"
+  echo "$(title_border)"
 }
 
-log() { echo -e "\e[1;32m[+]\e[0m $*"; }
-info() { echo -e "\e[1;34m[i]\e[0m $*"; }
-warn() { echo -e "\e[1;33m[!]\e[0m $*"; }
-err() { echo -e "\e[1;31m[ERR]\e[0m $*" >&2; }
+usage() {
+  cat <<USAGE
+Uso:
+  sudo bash install.sh [--auto] [--resume] [--reset] [--dry-run]
 
-# Restart a systemd service but do not abort install on failure; print diagnostics instead
-restart_service_safe() {
-  local svc="$1"
-  if ! systemctl restart "$svc"; then
-    err "Failed to restart $svc. Showing status and recent logs (installation will continue)."
-    systemctl status "$svc" --no-pager || true
-    journalctl -xeu "$svc" --no-pager | tail -n 100 || true
+Opciones:
+  --auto       Modo automático (no preguntar confirmaciones)
+  --resume     Reanudar desde estado previo (por defecto si existe progreso)
+  --reset      Borrar progreso y reiniciar instalación
+  --dry-run    Simulación: mostrar qué se haría sin ejecutar
+USAGE
+}
+
+AUTO_MODE=false
+RESUME=false
+RESET=false
+
+parse_arguments() {
+  for arg in "$@"; do
+    case "$arg" in
+      --auto) AUTO_MODE=true; INTERACTIVE_MODE=false ;;
+      --resume) RESUME=true ;;
+      --reset) RESET=true ;;
+      --dry-run) DRY_RUN=true ;;
+      -h|--help) usage; exit 0 ;;
+      *) ;;
+    esac
+  done
+}
+
+# Definición de pasos (archivo + título)
+TOTAL_STEPS=12
+STEPS=(
+  "01-system-check:Verificación del sistema"
+  "02-install-deps:Instalación de dependencias"
+  "03-setup-db:Configuración de base de datos"
+  "04-install-pdns-auth:Instalación PowerDNS Authoritative"
+  "05-install-pdns-recursor:Instalación PowerDNS Recursor"
+  "06-configure-zones:Configuración de zonas DNS"
+  "07-install-pdns-admin:Instalación PowerDNS-Admin"
+  "08-setup-nginx:Configuración de nginx"
+  "09-setup-firewall:Configuración de firewall"
+  "10-generate-creds:Generación de credenciales"
+  "11-start-services:Inicio de servicios"
+  "12-final-tests:Pruebas finales"
+)
+
+ask_continue() {
+  if [[ "$AUTO_MODE" == true || "$INTERACTIVE_MODE" != true ]]; then
     return 0
   fi
+  read -r -p "¿Continuar con este paso? [S/n]: " ans || true
+  [[ -z "$ans" || "$ans" =~ ^[sS]$ ]]
 }
 
-# Enable a systemd service but continue on failure
-safe_enable_service() {
-  local svc="$1"
-  systemctl enable "$svc" || warn "Failed to enable service $svc (continuing)"
+show_step_header() {
+  local idx=$1
+  local title=$2
+  echo "$(title_border)"
+  printf "║  %s PASO %d/%d: %s %-*s║\n" "$(bold)" "$idx" "$TOTAL_STEPS" "$title" $((44-${#title})) "$(normal)"
+  echo "$(title_border)"
 }
 
-# Determine a safe recursor bind IP based on DNS_SERVER_IP presence
-resolve_rec_bind_ip() {
-  local ip="${DNS_SERVER_IP:-}"
-  if [[ -z "$ip" ]]; then
-    warn "DNS_SERVER_IP not set; recursor will bind to 0.0.0.0"
-    REC_BIND_IP="0.0.0.0"
-    return
+progress_bar() {
+  local current=$1 total=$2 label=$3
+  local width=24
+  local filled=$(( current * width / total ))
+  local empty=$(( width - filled ))
+  printf "[%s%s] %d%% (%d/%d) - %s\n" \
+    "$(printf '█%.0s' $(seq 1 $filled))" "$(printf '░%.0s' $(seq 1 $empty))" \
+    $(( current * 100 / total )) "$current" "$total" "$label"
+}
+
+execute_step() {
+  local step_key="$1"; local step_file; step_file="${step_key%%:*}"; local step_title; step_title="${step_key#*:}"
+  local idx="$2"
+  show_step_header "$idx" "$step_title"
+  show_step_status "$step_file"
+
+  if is_step_completed "$step_file"; then
+    show_step_skipped "$step_title"
+    return 0
   fi
-  if ip -4 addr show | grep -qw "$ip"; then
-    REC_BIND_IP="$ip"
+
+  if ! ask_continue; then
+    mark_step_pending "$step_file"
+    echo "Saltado por el usuario."
+    return 0
+  fi
+
+  local script_path="scripts/steps/${step_file}.sh"
+  if [[ ! -x "$script_path" ]]; then
+    log_error "El script de paso no existe: $script_path"
+    mark_step_failed "$step_file" "script_not_found"
+    return 1
+  fi
+
+  progress_bar "$idx" "$TOTAL_STEPS" "$step_title..."
+
+  if [[ "$DRY_RUN" == true ]]; then
+    log_info "[DRY-RUN] Ejecutaría: $script_path"
+    mark_step_completed "$step_file"
+    show_step_success "$step_title"
+    return 0
+  fi
+
+  if bash "$script_path"; then
+    mark_step_completed "$step_file"
+    show_step_success "$step_title"
   else
-    warn "DNS_SERVER_IP $ip not present on any interface; recursor will bind to 0.0.0.0"
-    REC_BIND_IP="0.0.0.0"
+    local exit_code=$?
+    show_step_error "$step_title" "$exit_code"
+    handle_error "$step_file" "$exit_code"
   fi
 }
 
-ensure_config() {
-  if [[ ! -f "$CONFIG_FILE" ]]; then
-    err "Missing $CONFIG_FILE. Please create it before running."
-    exit 1
-  fi
-  set -a
-  # shellcheck disable=SC1090
-  source "$CONFIG_FILE"
-  set +a
-}
-
-rand_hex() { openssl rand -hex 24; }
-rand_pw() { openssl rand -base64 24 | tr -d '\n' | tr '/+' 'Aa'; }
-
-# Defaults and derived values
-set_defaults() {
-  DB_TYPE=${DB_TYPE:-postgresql}
-  DB_NAME=${DB_NAME:-powerdns}
-  DB_USER=${DB_USER:-pdns}
-  DB_PASSWORD=${DB_PASSWORD:-}
-  ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-  ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-  ADMIN_EMAIL=${ADMIN_EMAIL:-admin@$DNS_ZONE}
-  PDNS_AUTH_PORT=${PDNS_AUTH_PORT:-5300}
-  PDNS_RECURSOR_PORT=${PDNS_RECURSOR_PORT:-53}
-  WEBUI_PORT=${WEBUI_PORT:-9191}
-
-  # Generated secrets
-  if [[ -z "${DB_PASSWORD}" ]]; then DB_PASSWORD=$(rand_pw); fi
-  PDNS_API_KEY=${PDNS_API_KEY:-$(rand_hex)}
-  PDNS_ADMIN_SECRET_KEY=${PDNS_ADMIN_SECRET_KEY:-$(rand_hex)}
-  PDNS_ADMIN_API_KEY=${PDNS_ADMIN_API_KEY:-$(rand_hex)}
-  if [[ -z "${ADMIN_PASSWORD}" ]]; then ADMIN_PASSWORD=$(rand_pw); fi
-
-  # Other derived
-  PDNS_API_URL="http://127.0.0.1:8081" # pdns authoritative API default
-  SITE_FQDN="dns.$DNS_ZONE"
-}
-
-apt_install_packages() {
-  log "Updating apt and installing required packages"
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y
-  apt-get install -y \
-    gnupg2 lsb-release ca-certificates software-properties-common curl jq \
-    postgresql postgresql-contrib \
-    pdns-server pdns-backend-pgsql pdns-recursor \
-    nginx openssl \
-    git python3-venv python3-pip python3-dev python3-distutils build-essential pkg-config libmariadb-dev libpq-dev libffi-dev libldap2-dev libsasl2-dev libssl-dev \
-    ufw
-}
-
-setup_postgres() {
-  log "Configuring PostgreSQL for PowerDNS and PowerDNS-Admin"
-  # Escape single quotes in password for SQL safety
-  SQL_DB_PASSWORD=${DB_PASSWORD//\'/''}
-  # Create DB and user for PDNS
-  sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE ROLE $DB_USER WITH LOGIN PASSWORD '$SQL_DB_PASSWORD';"
-  # Always ensure the password matches the current config to avoid auth failures on reruns
-  sudo -u postgres psql -c "ALTER ROLE $DB_USER WITH PASSWORD '$SQL_DB_PASSWORD';" >/dev/null
-  sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 || \
-    sudo -u postgres createdb -O "$DB_USER" "$DB_NAME"
-
-  # Ensure privileges
-  sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DB_NAME\" TO \"$DB_USER\";" >/dev/null || true
-  sudo -u postgres psql -d "$DB_NAME" -c "ALTER SCHEMA public OWNER TO \"$DB_USER\";" >/dev/null || true
-
-  # Ensure pg_hba.conf allows pdns user from localhost
-  PG_HBA=$(ls /etc/postgresql/*/main/pg_hba.conf 2>/dev/null | head -n1)
-  if [[ -n "$PG_HBA" ]]; then
-    if ! grep -Eqs "^host\s+${DB_NAME}\s+${DB_USER}\s+127\.0\.0\.1/32\s+scram-sha-256" "$PG_HBA"; then
-      echo "host    ${DB_NAME}    ${DB_USER}    127.0.0.1/32    scram-sha-256" >> "$PG_HBA"
-      systemctl restart postgresql || systemctl reload postgresql || true
-    fi
-  fi
-
-  # Apply PDNS schema (always, idempotent via IF NOT EXISTS)
-  info "Applying PowerDNS authoritative schema (idempotent)"
-  cat <<'SQL' | sudo -u postgres psql -d "$DB_NAME"
-CREATE TABLE IF NOT EXISTS domains (
-  id              SERIAL PRIMARY KEY,
-  name            VARCHAR(255) NOT NULL,
-  master          VARCHAR(128) DEFAULT NULL,
-  last_check      INT DEFAULT NULL,
-  type            VARCHAR(6) NOT NULL,
-  notified_serial INT DEFAULT NULL,
-  account         VARCHAR(40) DEFAULT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS name_index ON domains(name);
-
-CREATE TABLE IF NOT EXISTS records (
-  id              SERIAL PRIMARY KEY,
-  domain_id       INT DEFAULT NULL,
-  name            VARCHAR(255) DEFAULT NULL,
-  type            VARCHAR(10) DEFAULT NULL,
-  content         VARCHAR(65535) DEFAULT NULL,
-  ttl             INT DEFAULT NULL,
-  prio            INT DEFAULT NULL,
-  change_date     INT DEFAULT NULL,
-  disabled        BOOLEAN DEFAULT 'f',
-  ordername       VARCHAR(255) DEFAULT NULL,
-  auth            BOOLEAN DEFAULT 't'
-);
-CREATE INDEX IF NOT EXISTS rec_name_index ON records(name);
-CREATE INDEX IF NOT EXISTS rec_type_index ON records(type);
-CREATE INDEX IF NOT EXISTS domain_id ON records(domain_id);
-
-CREATE TABLE IF NOT EXISTS supermasters (
-  ip        INET NOT NULL,
-  nameserver VARCHAR(255) NOT NULL,
-  account   VARCHAR(40) NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS comments (
-  id          SERIAL PRIMARY KEY,
-  domain_id   INT NOT NULL,
-  name        VARCHAR(255) NOT NULL,
-  type        VARCHAR(10) NOT NULL,
-  modified_at INT NOT NULL,
-  account     VARCHAR(40) NOT NULL,
-  comment     TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS comments_domain_id_idx ON comments (domain_id);
-CREATE INDEX IF NOT EXISTS comments_name_type_idx ON comments (name, type);
-CREATE INDEX IF NOT EXISTS comments_order_idx ON comments (domain_id, modified_at);
-
-CREATE TABLE IF NOT EXISTS domainmetadata (
-  id         SERIAL PRIMARY KEY,
-  domain_id  INT REFERENCES domains(id) ON DELETE CASCADE,
-  kind       VARCHAR(32),
-  content    TEXT
-);
-CREATE INDEX IF NOT EXISTS domainmetadata_idx ON domainmetadata(domain_id, kind);
-
-CREATE TABLE IF NOT EXISTS cryptokeys (
-  id         SERIAL PRIMARY KEY,
-  domain_id  INT REFERENCES domains(id) ON DELETE CASCADE,
-  flags      INT NOT NULL,
-  active     BOOLEAN,
-  content    TEXT
-);
-CREATE INDEX IF NOT EXISTS domainidindex ON cryptokeys(domain_id);
-
-CREATE TABLE IF NOT EXISTS tsigkeys (
-  id        SERIAL PRIMARY KEY,
-  name      VARCHAR(255),
-  algorithm VARCHAR(50),
-  secret    VARCHAR(255)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS namealgoindex ON tsigkeys(name, algorithm);
-SQL
-  # Verify schema presence
-  if ! sudo -u postgres psql -d "$DB_NAME" -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='domains'" | grep -q 1; then
-    warn "PowerDNS schema verification failed: table 'domains' not found in $DB_NAME. Check PostgreSQL logs."
-  fi
-
-  # Ensure ownership and privileges for PDNS user (fixes permission denied on 'domains')
-  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "ALTER DATABASE \"$DB_NAME\" OWNER TO \"$DB_USER\";" || true
-  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON DATABASE \"$DB_NAME\" TO \"$DB_USER\";" || true
-  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "GRANT USAGE, CREATE ON SCHEMA public TO \"$DB_USER\";" || true
-  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "ALTER SCHEMA public OWNER TO \"$DB_USER\";" || true
-  # Change ownership of existing tables and sequences in public schema to PDNS user
-  sudo -u postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 <<SQL || true
-DO $$
-DECLARE r RECORD;
-BEGIN
-  FOR r IN SELECT c.relkind, format('%I.%I', n.nspname, c.relname) AS fqname
-           FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-           WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S')
-  LOOP
-    EXECUTE 'ALTER ' || CASE WHEN r.relkind='S' THEN 'SEQUENCE' ELSE 'TABLE' END || ' ' || r.fqname || ' OWNER TO "${DB_USER}"';
-  END LOOP;
-END$$;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "${DB_USER}";
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "${DB_USER}";
-SQL
-
-  # Separate DB for PowerDNS-Admin
-  PDA_DB_NAME=${PDA_DB_NAME:-powerdns_admin}
-  PDA_DB_USER=${PDA_DB_USER:-pdnsadmin}
-  PDA_DB_PASSWORD=${PDA_DB_PASSWORD:-$(rand_pw)}
-  sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PDA_DB_USER'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE ROLE $PDA_DB_USER WITH LOGIN PASSWORD '$PDA_DB_PASSWORD';"
-  sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$PDA_DB_NAME'" | grep -q 1 || \
-    sudo -u postgres createdb -O "$PDA_DB_USER" "$PDA_DB_NAME"
-}
-
-configure_pdns_authoritative() {
-  log "Configuring PowerDNS Authoritative"
-  mkdir -p /etc/powerdns
-  cat > /etc/powerdns/pdns.conf <<EOF
-config-dir=/etc/powerdns
-setuid=pdns
-setgid=pdns
-version-string=powerdns
-
-# Listen on all interfaces for auth service (non-standard port)
-local-address=0.0.0.0
-local-port=$PDNS_AUTH_PORT
-
-launch=gpgsql
-# PostgreSQL DSN
-gpgsql-host=127.0.0.1
-gpgsql-port=5432
-gpgsql-dbname=$DB_NAME
-gpgsql-user=$DB_USER
-gpgsql-password=$DB_PASSWORD
-
-api=yes
-api-key=$PDNS_API_KEY
-webserver=yes
-webserver-address=127.0.0.1
-webserver-port=8081
-
-# Security
-allow-dnsupdate-from=$INTERNAL_NETWORK,$VPN_NETWORK,127.0.0.1
-EOF
-
-  safe_enable_service pdns
-  restart_service_safe pdns
-}
-
-configure_pdns_recursor() {
-  log "Configuring PowerDNS Recursor"
-  mkdir -p /etc/powerdns
-  resolve_rec_bind_ip
-  cat > /etc/powerdns/recursor.conf <<EOF
-# Recursor listens on the main DNS IP and forwards internal zone to auth
-local-address=$REC_BIND_IP
-local-port=$PDNS_RECURSOR_PORT
-
-# allow internal and VPN clients
-allow-from=$INTERNAL_NETWORK,$VPN_NETWORK,127.0.0.1
-
-# Forward internal authoritative zones to PDNS auth
-forward-zones=$DNS_ZONE=127.0.0.1:$PDNS_AUTH_PORT
-
-# Public resolvers for everything else
-forward-zones-recurse=.=$DNS_FORWARDER_1;$DNS_FORWARDER_2
-
-quiet=yes
-EOF
-  safe_enable_service pdns-recursor
-  restart_service_safe pdns-recursor
-}
-
-install_powerdns_admin() {
-  log "Installing PowerDNS-Admin (from GitHub)"
-  PDA_DIR=/opt/powerdns-admin
-  if [[ ! -d "$PDA_DIR" ]]; then
-    git clone https://github.com/PowerDNS-Admin/PowerDNS-Admin.git "$PDA_DIR"
-  fi
-  cd "$PDA_DIR"
-  python3 -m venv venv
-  source venv/bin/activate
-  pip install --upgrade pip wheel
-  pip install -r requirements.txt
-
-  # Create config.py
-  cat > $PDA_DIR/config.py <<EOF
-import os
-basedir = os.path.abspath(os.path.dirname(__file__))
-
-SQLA_DB_USER = "$PDA_DB_USER"
-SQLA_DB_PASSWORD = "$PDA_DB_PASSWORD"
-SQLA_DB_NAME = "$PDA_DB_NAME"
-SQLA_DB_HOST = "127.0.0.1"
-SQLA_DB_PORT = 5432
-
-SQLALCHEMY_DATABASE_URI = f"postgresql://{SQLA_DB_USER}:{SQLA_DB_PASSWORD}@{SQLA_DB_HOST}:{SQLA_DB_PORT}/{SQLA_DB_NAME}"
-SQLALCHEMY_TRACK_MODIFICATIONS = False
-
-SECRET_KEY = "$PDNS_ADMIN_SECRET_KEY"
-BIND_ADDRESS = "127.0.0.1"
-PORT = $WEBUI_PORT
-
-PDNS_STATS_URL = "$PDNS_API_URL/servers/localhost/statistics"
-PDNS_API_URL = "$PDNS_API_URL"
-PDNS_API_KEY = "$PDNS_API_KEY"
-PDNS_VERSION = "4.8.0"
-EOF
-
-  # Initialize DB and create admin user
-  export FLASK_APP=powerdnsadmin/__init__.py
-  flask db upgrade || true
-
-  # Create admin user if not exists
-  python3 - <<PY
-import os
-os.environ['FLASK_APP']='powerdnsadmin/__init__.py'
-from powerdnsadmin import create_app
-from powerdnsadmin.models.user import User
-from powerdnsadmin import db
-app = create_app()
-with app.app_context():
-    u = User.query.filter_by(username="${ADMIN_USERNAME}").first()
-    if not u:
-        u = User(username="${ADMIN_USERNAME}", password="${ADMIN_PASSWORD}", plain_text_password="${ADMIN_PASSWORD}", email="${ADMIN_EMAIL}", role_name='Administrator', confirmed=True)
-        db.session.add(u)
-        db.session.commit()
-        print('Admin user created')
-    else:
-        print('Admin user already exists, skipping')
-PY
-
-  deactivate
-
-  # Systemd service (gunicorn)
-  cat > /etc/systemd/system/powerdns-admin.service <<EOF
-[Unit]
-Description=PowerDNS-Admin Gunicorn Service
-After=network.target
-
-[Service]
-User=www-data
-Group=www-data
-WorkingDirectory=$PDA_DIR
-Environment="PATH=$PDA_DIR/venv/bin"
-ExecStart=$PDA_DIR/venv/bin/gunicorn -w 3 -b 127.0.0.1:$WEBUI_PORT "powerdnsadmin:create_app()"
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  systemctl daemon-reload
-  systemctl enable powerdns-admin
-  systemctl restart powerdns-admin
-}
-
-configure_nginx_ssl() {
-  log "Configuring nginx reverse proxy with self-signed SSL"
-  mkdir -p /etc/nginx/ssl/pdns-admin
-  if [[ ! -f /etc/nginx/ssl/pdns-admin/server.key ]]; then
-    openssl req -x509 -nodes -newkey rsa:2048 -keyout /etc/nginx/ssl/pdns-admin/server.key -out /etc/nginx/ssl/pdns-admin/server.crt -days 3650 -subj "/CN=$SITE_FQDN"
-    chmod 600 /etc/nginx/ssl/pdns-admin/server.key
-  fi
-
-  cat > /etc/nginx/sites-available/powerdns-admin <<EOF
-server {
-    listen 80;
-    server_name $SITE_FQDN;
-    return 301 https://$SITE_FQDN$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name $SITE_FQDN;
-
-    ssl_certificate     /etc/nginx/ssl/pdns-admin/server.crt;
-    ssl_certificate_key /etc/nginx/ssl/pdns-admin/server.key;
-
-    location / {
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_pass http://127.0.0.1:$WEBUI_PORT;
-    }
-}
-EOF
-  ln -sf /etc/nginx/sites-available/powerdns-admin /etc/nginx/sites-enabled/powerdns-admin
-  if [[ -f /etc/nginx/sites-enabled/default ]]; then rm -f /etc/nginx/sites-enabled/default; fi
-  nginx -t
-  systemctl enable nginx
-  systemctl restart nginx
-}
-
-configure_ufw() {
-  log "Configuring UFW firewall rules"
-  ufw --force enable || true
-  ufw allow $PDNS_RECURSOR_PORT/tcp
-  ufw allow $PDNS_RECURSOR_PORT/udp
-  ufw allow 80/tcp
-  ufw allow 443/tcp
-  # Do not expose 5300 (auth) externally
-}
-
-create_initial_zone() {
-  log "Creating initial DNS zone and records ($DNS_ZONE)"
-  # Ensure pdnsutil is installed (part of pdns-server)
-  if ! pdnsutil list-all-zones | grep -q "^$DNS_ZONE$"; then
-    pdnsutil create-zone "$DNS_ZONE" "dns.$DNS_ZONE"
-  else
-    info "Zone $DNS_ZONE already exists, skipping creation"
-  fi
-  # Basic NS + A records
-  pdnsutil add-record "$DNS_ZONE" "dns" A "$DNS_SERVER_IP" || true
-  # User-defined records
-  add_rec() {
-    local pair="$1"
-    local name="${pair%%:*}"
-    local ip="${pair#*:}"
-    if [[ -n "$name" && -n "$ip" ]]; then
-      pdnsutil add-record "$DNS_ZONE" "$name" A "$ip" || true
-    fi
-  }
-  add_rec "${DNS_RECORD_1:-}"
-  add_rec "${DNS_RECORD_2:-}"
-  add_rec "${DNS_RECORD_3:-}"
-}
-
-write_credentials() {
-  log "Writing credentials to $CREDENTIALS_FILE"
-  cat > "$CREDENTIALS_FILE" <<EOF
-PowerDNS Automated Deployment - Credentials and Endpoints
-Generated on: $(date -Is)
-
-System
-- OS: Ubuntu 24.04 LTS (expected)
-- DNS Server IP: $DNS_SERVER_IP
-- Internal Network: $INTERNAL_NETWORK
-- VPN Network: $VPN_NETWORK
-
-Components and Ports
-- PowerDNS Authoritative: port $PDNS_AUTH_PORT (local only)
-- PowerDNS Recursor: port $PDNS_RECURSOR_PORT (public)
-- PowerDNS API URL: $PDNS_API_URL
-- PowerDNS-Admin Backend: 127.0.0.1:$WEBUI_PORT
-- Web UI (HTTPS): https://$SITE_FQDN/
-
-Database (PostgreSQL)
-- PDNS DB: name=$DB_NAME, user=$DB_USER, password=$DB_PASSWORD
-- PDNS-Admin DB: name=$PDA_DB_NAME, user=$PDA_DB_USER, password=$PDA_DB_PASSWORD
-
-Authentication / Secrets
-- PowerDNS API Key: $PDNS_API_KEY
-- PowerDNS-Admin SECRET_KEY: $PDNS_ADMIN_SECRET_KEY
-- PowerDNS-Admin API Key (to generate via UI if needed): $PDNS_ADMIN_API_KEY
-- Admin user: $ADMIN_USERNAME
-- Admin password: $ADMIN_PASSWORD
-- Admin email: $ADMIN_EMAIL
-
-DNS Zone Initialized
-- Zone: $DNS_ZONE
-- Records:
-  - ${DNS_RECORD_1:-}
-  - ${DNS_RECORD_2:-}
-  - ${DNS_RECORD_3:-}
-
-Next Steps
-1. Point your browser to https://$SITE_FQDN/ (accept the self-signed certificate warning).
-2. Login with the admin credentials above.
-3. In Settings -> PDNS, verify API URL and API key are set. Server ID is 'localhost'.
-4. Optionally replace the SSL certificate with a trusted certificate.
-5. Point your clients to DNS server $DNS_SERVER_IP (UDP/TCP $PDNS_RECURSOR_PORT).
-EOF
-  chmod 600 "$CREDENTIALS_FILE"
-}
-
-final_summary() {
-  echo
-  echo "================ INSTALLATION COMPLETE ================"
-  echo "PowerDNS-Admin URL: https://$SITE_FQDN/"
-  echo "Admin user: $ADMIN_USERNAME"
-  echo "Admin password: $ADMIN_PASSWORD"
-  echo "Credentials file: $CREDENTIALS_FILE"
-  echo "Services: pdns, pdns-recursor, powerdns-admin, nginx"
-  echo "======================================================"
+show_summary() {
+  echo "$(title_border)"
+  echo "$(title_line)           RESUMEN DE INSTALACIÓN"
+  echo "$(title_border)"
+  local completed=$(count_steps_by_status completed)
+  echo "Pasos completados: ${completed}/${TOTAL_STEPS}"
+  list_steps_summary
+  echo ""
+  echo "🌐 Acceso a PowerDNS-Admin:"
+  echo "   URL: https://${DNS_SERVER_IP}:${WEBUI_PORT}"
+  echo "   Usuario: ${ADMIN_USERNAME}"
+  echo "   Contraseña: [ver CREDENTIALS.txt]"
+  echo ""
+  echo "📄 Credenciales: ${CREDENTIALS_FILE}"
+  echo "📊 Log de instalación: ${LOG_FILE}"
 }
 
 main() {
-  require_root
-  ensure_config
-  set_defaults
-  apt_install_packages
-  setup_postgres
-  configure_pdns_authoritative
-  configure_pdns_recursor
-  install_powerdns_admin
-  configure_nginx_ssl
-  configure_ufw
-  create_initial_zone
-  write_credentials
-  final_summary
+  parse_arguments "$@"
+  [[ "$RESET" == true ]] && reset_progress
+  load_progress
+  init_logging
+  show_banner
+
+  local i=0
+  for step in "${STEPS[@]}"; do
+    i=$((i+1))
+    execute_step "$step" "$i"
+  done
+  show_summary
 }
 
 main "$@"
