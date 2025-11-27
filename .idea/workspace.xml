@@ -6,7 +6,37 @@
   <component name="ChangeListManager">
     <list default="true" id="f3674445-b5ae-4f95-8999-2729b9152081" name="Changes" comment="new">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/03-setup-db.sh" beforeDir="false" afterPath="$PROJECT_DIR$/powerdns-setup/scripts/steps/03-setup-db.sh" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/INSTALL.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/README.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/config.env" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/configs/nginx.conf.template" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/configs/pdns.conf.template" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/configs/recursor.conf.template" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/configs/zones/doovate.com.zone.template" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/docs/ARCHITECTURE.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/docs/TROUBLESHOOTING.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/docs/USAGE.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/install.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/generate-passwords.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/healthcheck.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/lib/colors.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/lib/errors.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/lib/logging.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/lib/progress.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/01-system-check.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/02-install-deps.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/03-setup-db.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/04-install-pdns-auth.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/05-install-pdns-recursor.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/06-configure-zones.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/07-install-pdns-admin.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/08-setup-nginx.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/09-setup-firewall.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/10-generate-creds.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/11-start-services.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/steps/12-final-tests.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/scripts/test-dns.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/powerdns-setup/uninstall.sh" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -240,7 +270,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764244033911</updated>
     </task>
-    <option name="localTasksCounter" value="20" />
+    <task id="LOCAL-00020" summary="new">
+      <option name="closed" value="true" />
+      <created>1764244565768</created>
+      <option name="number" value="00020" />
+      <option name="presentableId" value="LOCAL-00020" />
+      <option name="project" value="LOCAL" />
+      <updated>1764244565768</updated>
+    </task>
+    <option name="localTasksCounter" value="21" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
