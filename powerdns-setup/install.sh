@@ -33,6 +33,9 @@ RESET=false
 RESUME=false
 DRY_RUN=${DRY_RUN:-false}
 
+# Activar AUTO_MODE si no hay TTY (no interactivo)
+if [ ! -t 0 ]; then AUTO_MODE=true; fi
+
 for arg in "$@"; do
   case "$arg" in
     --auto) AUTO_MODE=true ;;
@@ -52,8 +55,11 @@ fi
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 
-# Aplicar DRY_RUN al entorno de logs
-export DRY_RUN AUTO_MODE
+# Mensaje de bienvenida y modo
+echo "Iniciando instalador de PowerDNS (AUTO_MODE=${AUTO_MODE}, DRY_RUN=${DRY_RUN})"
+
+# Aplicar DRY_RUN/AUTO_MODE al entorno de logs
+export DRY_RUN AUTO_MODE VERBOSE_MODE ENABLE_LOGGING LOG_FILE
 
 # Reset/resume
 if [ "$RESET" = true ]; then
@@ -144,14 +150,19 @@ run_step(){
   fi
 
   local script="$ROOT_DIR/scripts/steps/${idx}-${key}.sh"
-  if [ ! -x "$script" ]; then
-    log_warn "Script de paso no encontrado: $script (marcando como skipped)"
+  if [ ! -f "$script" ]; then
+    log_error "Script de paso no encontrado: $script (marcando como skipped)"
     progress_set "$step_key" "skipped"
     return 0
   fi
 
-  # Ejecutar el paso
-  "$script" "$step_key" "$title"
+  # Ejecutar el paso: si no es ejecutable, invocamos con bash
+  if [ ! -x "$script" ]; then
+    log_warn "${script} no es ejecutable; invocando con bash"
+    bash "$script" "$step_key" "$title"
+  else
+    "$script" "$step_key" "$title"
+  fi
 }
 
 main(){

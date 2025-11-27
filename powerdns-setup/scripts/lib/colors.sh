@@ -23,6 +23,20 @@ else
   CYAN=''
 fi
 
-box_top() { local title="$1"; echo -e "${BOLD}╔════════════════════════════════════════════════════════════╗\n║  ${title}$(printf '%*s' $((56 - ${#title})) '' )║\n╚════════════════════════════════════════════════════════════╝${NORMAL}"; }
+box_top() {
+  local title="$1"
+  local box_width=60
+  # We print a 60-char wide box; inner content has 58 chars (borders use 2)
+  local inner_width=$((box_width - 2))
+  # We prefix with two spaces inside before title to match original aesthetic "║  "; adjust padding accordingly
+  local prefix="  "
+  local content_len=$(( ${#prefix} + ${#title} ))
+  local pad=$(( inner_width - content_len ))
+  if [ $pad -lt 0 ]; then pad=0; fi
+  # Build padding string of spaces with length pad
+  local padding
+  padding=$(printf '%*s' "$pad" '') || padding=""
+  echo -e "${BOLD}╔════════════════════════════════════════════════════════════╗\n║${prefix}${title}${padding}║\n╚════════════════════════════════════════════════════════════╝${NORMAL}"
+}
 check_ok(){ echo -e "${GREEN}✓${NORMAL}"; }
 check_fail(){ echo -e "${RED}✗${NORMAL}"; }
