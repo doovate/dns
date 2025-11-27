@@ -11,7 +11,7 @@ Esta guía describe los pasos para desplegar el stack de PowerDNS en Ubuntu 24.0
 ```
 cd /opt
 sudo git clone <REPO_URL> powerdns-setup
-cd powerdns-setup/powerdns-setup
+cd powerdns-setup
 ```
 
 ## 3. (Opcional) Personalizar configuración

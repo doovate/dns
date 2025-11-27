@@ -22,6 +22,39 @@ info() { echo -e "\e[1;34m[i]\e[0m $*"; }
 warn() { echo -e "\e[1;33m[!]\e[0m $*"; }
 err() { echo -e "\e[1;31m[ERR]\e[0m $*" >&2; }
 
+# Restart a systemd service but do not abort install on failure; print diagnostics instead
+restart_service_safe() {
+  local svc="$1"
+  if ! systemctl restart "$svc"; then
+    err "Failed to restart $svc. Showing status and recent logs (installation will continue)."
+    systemctl status "$svc" --no-pager || true
+    journalctl -xeu "$svc" --no-pager | tail -n 100 || true
+    return 0
+  fi
+}
+
+# Enable a systemd service but continue on failure
+safe_enable_service() {
+  local svc="$1"
+  systemctl enable "$svc" || warn "Failed to enable service $svc (continuing)"
+}
+
+# Determine a safe recursor bind IP based on DNS_SERVER_IP presence
+resolve_rec_bind_ip() {
+  local ip="${DNS_SERVER_IP:-}"
+  if [[ -z "$ip" ]]; then
+    warn "DNS_SERVER_IP not set; recursor will bind to 0.0.0.0"
+    REC_BIND_IP="0.0.0.0"
+    return
+  fi
+  if ip -4 addr show | grep -qw "$ip"; then
+    REC_BIND_IP="$ip"
+  else
+    warn "DNS_SERVER_IP $ip not present on any interface; recursor will bind to 0.0.0.0"
+    REC_BIND_IP="0.0.0.0"
+  fi
+}
+
 ensure_config() {
   if [[ ! -f "$CONFIG_FILE" ]]; then
     err "Missing $CONFIG_FILE. Please create it before running."
@@ -179,7 +212,7 @@ setuid=pdns
 setgid=pdns
 version-string=powerdns
 
-# Listen on localhost for API and on $PDNS_AUTH_PORT for auth service
+# Listen on all interfaces for auth service (non-standard port)
 local-address=0.0.0.0
 local-port=$PDNS_AUTH_PORT
 
@@ -201,16 +234,17 @@ webserver-port=8081
 allow-dnsupdate-from=$INTERNAL_NETWORK,$VPN_NETWORK,127.0.0.1
 EOF
 
-  systemctl enable pdns
-  systemctl restart pdns
+  safe_enable_service pdns
+  restart_service_safe pdns
 }
 
 configure_pdns_recursor() {
   log "Configuring PowerDNS Recursor"
   mkdir -p /etc/powerdns
+  resolve_rec_bind_ip
   cat > /etc/powerdns/recursor.conf <<EOF
 # Recursor listens on the main DNS IP and forwards internal zone to auth
-local-address=$DNS_SERVER_IP
+local-address=$REC_BIND_IP
 local-port=$PDNS_RECURSOR_PORT
 
 # allow internal and VPN clients
@@ -224,8 +258,8 @@ forward-zones-recurse=.=$DNS_FORWARDER_1;$DNS_FORWARDER_2
 
 quiet=yes
 EOF
-  systemctl enable pdns-recursor
-  systemctl restart pdns-recursor
+  safe_enable_service pdns-recursor
+  restart_service_safe pdns-recursor
 }
 
 install_powerdns_admin() {
