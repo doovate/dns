@@ -152,9 +152,23 @@ execute_step() {
   fi
 
   local script_path="scripts/steps/${step_file}.sh"
-  if [[ ! -x "$script_path" ]]; then
-    log_error "El script de paso no existe: $script_path"
+  # Asegurar permisos de ejecución y finales de línea Unix si el archivo existe
+  if [[ -f "$script_path" && ! -x "$script_path" ]]; then
+    chmod +x "$script_path" || true
+  fi
+  if [[ -f "$script_path" ]]; then
+    # Normalizar finales de línea (convertir CRLF a LF)
+    sed -i 's/\r$//' "$script_path" 2>/dev/null || true
+  fi
+  # Verificaciones claras
+  if [[ ! -f "$script_path" ]]; then
+    log_error "Script de paso no encontrado: $script_path"
     mark_step_failed "$step_file" "script_not_found"
+    return 1
+  fi
+  if [[ ! -x "$script_path" ]]; then
+    log_error "Script de paso no es ejecutable: $script_path (intenté chmod +x)"
+    mark_step_failed "$step_file" "script_not_executable"
     return 1
   fi
 
