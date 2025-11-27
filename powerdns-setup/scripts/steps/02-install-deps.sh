@@ -18,7 +18,7 @@ main() {
   local base_pkgs=(
     ca-certificates curl gnupg2 jq git lsb-release
     build-essential pkg-config 
-    python3 python3-venv python3-pip python3-dev python3-distutils
+    python3 python3-venv python3-pip python3-dev python3-setuptools
     libffi-dev libssl-dev libldap2-dev libsasl2-dev
     postgresql postgresql-contrib 
     pdns-server pdns-backend-pgsql pdns-recursor
